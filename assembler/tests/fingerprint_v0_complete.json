@@ -1,0 +1,277 @@
+{
+  "expected_n": 3,
+  "models": {
+    "google-gemini-2-5-flash": {
+      "traces": 376,
+      "prompts_covered": 124,
+      "n_complete_prompts": 124,
+      "samples_total": 376,
+      "n_completeness": 1.0,
+      "nonempty": 376,
+      "empty": 0,
+      "reasoning_traces": 0,
+      "reasoning_source": {
+        "inline_content": 376,
+        "reasoning_content": 0,
+        "none": 0
+      },
+      "avg_tok_out": 2863.8,
+      "latency_ms": {
+        "median": 2070.728063583374,
+        "p90": 20655.333757400513
+      },
+      "resp_len_chars": {
+        "p25": 1686,
+        "median": 3274,
+        "p90": 7136
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 0
+      },
+      "finish_reason": {
+        "stop": 281,
+        "length": 95
+      }
+    },
+    "free-flash-pool": {
+      "traces": 372,
+      "prompts_covered": 124,
+      "n_complete_prompts": 124,
+      "samples_total": 372,
+      "n_completeness": 1.0,
+      "nonempty": 372,
+      "empty": 0,
+      "reasoning_traces": 294,
+      "reasoning_source": {
+        "inline_content": 78,
+        "reasoning_content": 294,
+        "none": 0
+      },
+      "avg_tok_out": 2192.8,
+      "latency_ms": {
+        "median": 69.26202774047852,
+        "p90": 33316.68281555176
+      },
+      "resp_len_chars": {
+        "p25": 1082,
+        "median": 2168,
+        "p90": 14695
+      },
+      "reason_len_chars": {
+        "p25": 349,
+        "median": 2138,
+        "p90": 9657
+      },
+      "finish_reason": {
+        "length": 78,
+        "stop": 294
+      }
+    },
+    "google-gemini-3-1-flash-lite": {
+      "traces": 372,
+      "prompts_covered": 124,
+      "n_complete_prompts": 124,
+      "samples_total": 372,
+      "n_completeness": 1.0,
+      "nonempty": 372,
+      "empty": 0,
+      "reasoning_traces": 0,
+      "reasoning_source": {
+        "inline_content": 372,
+        "reasoning_content": 0,
+        "none": 0
+      },
+      "avg_tok_out": 639.6,
+      "latency_ms": {
+        "median": 2066.8489933013916,
+        "p90": 5372.235059738159
+      },
+      "resp_len_chars": {
+        "p25": 2114,
+        "median": 2465,
+        "p90": 3671
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 0
+      },
+      "finish_reason": {
+        "stop": 372
+      }
+    },
+    "google-gemini-3-6-flash": {
+      "traces": 368,
+      "prompts_covered": 122,
+      "n_complete_prompts": 121,
+      "samples_total": 368,
+      "n_completeness": 0.992,
+      "nonempty": 368,
+      "empty": 0,
+      "reasoning_traces": 0,
+      "reasoning_source": {
+        "inline_content": 368,
+        "reasoning_content": 0,
+        "none": 0
+      },
+      "avg_tok_out": 2079.0,
+      "latency_ms": {
+        "median": 2095.8826541900635,
+        "p90": 17632.95292854309
+      },
+      "resp_len_chars": {
+        "p25": 1607,
+        "median": 2267,
+        "p90": 4741
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 0
+      },
+      "finish_reason": {
+        "stop": 353,
+        "length": 15
+      }
+    },
+    "agnes-flash": {
+      "traces": 360,
+      "prompts_covered": 120,
+      "n_complete_prompts": 120,
+      "samples_total": 360,
+      "n_completeness": 1.0,
+      "nonempty": 360,
+      "empty": 0,
+      "reasoning_traces": 120,
+      "reasoning_source": {
+        "inline_content": 240,
+        "reasoning_content": 120,
+        "none": 0
+      },
+      "avg_tok_out": 854.6,
+      "latency_ms": {
+        "median": 25.231122970581055,
+        "p90": 12416.482210159302
+      },
+      "resp_len_chars": {
+        "p25": 1006,
+        "median": 2149,
+        "p90": 5693
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 1656
+      },
+      "finish_reason": {
+        "stop": 360
+      }
+    },
+    "google-gemini-3-5-flash-lite": {
+      "traces": 344,
+      "prompts_covered": 117,
+      "n_complete_prompts": 112,
+      "samples_total": 344,
+      "n_completeness": 0.957,
+      "nonempty": 344,
+      "empty": 0,
+      "reasoning_traces": 0,
+      "reasoning_source": {
+        "inline_content": 344,
+        "reasoning_content": 0,
+        "none": 0
+      },
+      "avg_tok_out": 585.6,
+      "latency_ms": {
+        "median": 2070.2850818634033,
+        "p90": 5409.203290939331
+      },
+      "resp_len_chars": {
+        "p25": 1238,
+        "median": 2151,
+        "p90": 4124
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 0
+      },
+      "finish_reason": {
+        "stop": 344
+      }
+    },
+    "wayward-minion": {
+      "traces": 325,
+      "prompts_covered": 110,
+      "n_complete_prompts": 105,
+      "samples_total": 325,
+      "n_completeness": 0.955,
+      "nonempty": 325,
+      "empty": 0,
+      "reasoning_traces": 317,
+      "reasoning_source": {
+        "inline_content": 8,
+        "reasoning_content": 317,
+        "none": 0
+      },
+      "avg_tok_out": 2348.0,
+      "latency_ms": {
+        "median": 58.210134506225586,
+        "p90": 105686.42282485962
+      },
+      "resp_len_chars": {
+        "p25": 853,
+        "median": 1885,
+        "p90": 15327
+      },
+      "reason_len_chars": {
+        "p25": 3508,
+        "median": 5307,
+        "p90": 16284
+      },
+      "finish_reason": {
+        "stop": 244,
+        "length": 81
+      }
+    },
+    "google-gemini-3-7-flash": {
+      "traces": 277,
+      "prompts_covered": 94,
+      "n_complete_prompts": 91,
+      "samples_total": 277,
+      "n_completeness": 0.968,
+      "nonempty": 277,
+      "empty": 0,
+      "reasoning_traces": 0,
+      "reasoning_source": {
+        "inline_content": 277,
+        "reasoning_content": 0,
+        "none": 0
+      },
+      "avg_tok_out": 1825.8,
+      "latency_ms": {
+        "median": 2087.2275829315186,
+        "p90": 25898.103713989258
+      },
+      "resp_len_chars": {
+        "p25": 1297,
+        "median": 2380,
+        "p90": 4086
+      },
+      "reason_len_chars": {
+        "p25": 0,
+        "median": 0,
+        "p90": 0
+      },
+      "finish_reason": {
+        "stop": 271,
+        "length": 6
+      }
+    }
+  },
+  "total_traces": 2794,
+  "total_nonempty": 2794,
+  "total_n_complete_prompts": 921
+}

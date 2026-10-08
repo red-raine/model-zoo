@@ -1,0 +1,58 @@
+{
+ "agnes-flash": {
+  "n": 360,
+  "scored": 360,
+  "mean": 0.245,
+  "median": 0.269,
+  "p90": 0.417
+ },
+ "free-flash-pool": {
+  "n": 372,
+  "scored": 372,
+  "mean": 0.37,
+  "median": 0.396,
+  "p90": 0.543
+ },
+ "google-gemini-2-5-flash": {
+  "n": 376,
+  "scored": 376,
+  "mean": 0.242,
+  "median": 0.258,
+  "p90": 0.391
+ },
+ "google-gemini-3-1-flash-lite": {
+  "n": 372,
+  "scored": 372,
+  "mean": 0.253,
+  "median": 0.264,
+  "p90": 0.406
+ },
+ "google-gemini-3-5-flash-lite": {
+  "n": 344,
+  "scored": 344,
+  "mean": 0.235,
+  "median": 0.231,
+  "p90": 0.405
+ },
+ "google-gemini-3-6-flash": {
+  "n": 368,
+  "scored": 368,
+  "mean": 0.215,
+  "median": 0.215,
+  "p90": 0.354
+ },
+ "google-gemini-3-7-flash": {
+  "n": 277,
+  "scored": 277,
+  "mean": 0.204,
+  "median": 0.198,
+  "p90": 0.347
+ },
+ "wayward-minion": {
+  "n": 325,
+  "scored": 325,
+  "mean": 0.353,
+  "median": 0.384,
+  "p90": 0.517
+ }
+}
