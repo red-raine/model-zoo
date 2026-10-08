@@ -1,0 +1,52 @@
+{
+  "name": "ZooBuilder - model spec to pipeline plan",
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "chat",
+        "model": {
+          "__rl": true,
+          "value": "free-flash-pool",
+          "mode": "list"
+        },
+        "options": {
+          "baseURL": "http://litellm:4000/v1",
+          "timeout": 60000
+        },
+        "promptType": "define",
+        "text": "You are the Model Zoo assembler. Given a user's model request, produce a concise ordered pipeline plan using these stage labels: research -> recipe -> data -> version(dvc) -> train(trl) -> distill -> eval(trace/gates) -> serve. Keep it to 8 lines or fewer. Request: {{ $json.body.spec }}",
+        "chatInput": "body.spec"
+      },
+      "id": "a1-zoo-assembler-llm",
+      "name": "Zoo assembler LLM",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// OPTIONAL: call the assembler CLI via HTTP to pre-fill the stage chain.\n// Here we enrich the LLM plan with the assembler's structured output when available.\nconst body = $json;\nreturn [{ json: { spec: $input.first().json.body.spec, llmPlan: body, status: 'assembled' } }];"
+      },
+      "id": "b1-post-process",
+      "name": "Post process",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Zoo assembler LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Post process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}
