@@ -1,13 +1,30 @@
 # Model Zoo — per-app key reservation (2026-10-08)
 
-> **Per stack-master policy:** one key PER APP, assigned models, revoke old
-> keys. This file is the reservation manifest the stack master uses to create
-> keys + checkout/checkin quota via the new n8n pipelines.
+> **CONSTITUTIONAL KEY LAW (AGENTS.md):** one key PER APP, never the master
+> key. Keys live in `C:\Users\myste\.config\opencode\keys\<app>.key`, set via
+> `askpass.ps1` (Windows popup), read only via `tools/tm/key_store.py`.
+> Every model/quota is requested + tracked per app in this file.
 
 ## Key currently in use (to be replaced)
-- **My tools read `LITELLM_MASTER_KEY`** from `B:\ai-stack\.env` (env-based,
-  passed to detached runs). That's the shared `opencoder` master key —
-  **should be revoked once app keys exist.**
+- **Old behavior (REVOKED):** tools read `LITELLM_MASTER_KEY` from
+  `B:\ai-stack\.env`. **That is now FORBIDDEN by law.** All tools read per-app
+  keys via `key_store.get_key(app)`. No master-key reads remain.
+
+## How a key is set (Windows popup)
+```powershell
+powershell -ExecutionPolicy Bypass -File "E:\vibe_coding\dev\bitnet runner\tools\tm\askpass.ps1" -App pool-model-zoo
+powershell -ExecutionPolicy Bypass -File "E:\vibe_coding\dev\bitnet runner\tools\tm\askpass.ps1" -App pool-sweep
+powershell -ExecutionPolicy Bypass -File "E:\vibe_coding\dev\bitnet runner\tools\tm\askpass.ps1" -App pool-eval
+```
+Requests the key → stores to `C:\Users\myste\.config\opencode\keys\<app>.key`
+(atomic write, outside repos).
+
+## Checkout/checkin via key_lease (n8n quota pipeline)
+```bash
+python tools/tm/key_lease.py checkout --app pool-model-zoo --budget 0.10
+python tools/tm/key_lease.py checkin  --app pool-model-zoo --spend 0.001
+python tools/tm/key_lease.py status   --app pool-model-zoo
+```
 
 ## The per-app keys I want (3 apps)
 
@@ -66,12 +83,16 @@ lite keys generate --alias pool-eval \
 
 ## Checkout/checkin (n8n quota pipeline)
 The n8n pipeline checks out a key+quota before a run and checks in after:
-- **checkout**: verify key `/v1/models` 200 + key budget remaining ≥ needed; mark
-  in-use in a ledger.
-- **run**: my tools set the key via env (`LITELLM_API_KEY=<app key>`), not master.
-- **checkin**: budget/spend snapshot → ledger, mark idle.
-- TODO: implement `tools/tm/key_lease.py` + n8n workflow (checkout/checkin).
+- **checkout**: `key_lease.py checkout --app <name> --budget N` → verifies key
+  registered (key_store), marks in-use in the lease ledger.
+- **run**: my tools read the key via `key_store.get_key(app)` at runtime — never
+  master, never inline.
+- **checkin**: `key_lease.py checkin --app <name> --spend N` → spend snapshot +
+  ledger, mark idle.
+- Implemented: `tools/tm/key_lease.py` (sqlite ledger, verified). n8n workflow
+  to wrap it is the next step.
 
 ## Revoke list (after migration)
-`opencoder` (master, all-team-models) — the currently-shared key my tools read.
-Keep `alice1-poolside` (owned by alice-bot lane), `model-bench-*` (bench).
+`opencoder` (master, all-team-models) — the REVOKED shared key. All my tools
+now use per-app keys; `red-lyre-opencode` (free-flash-pool) and
+`model-bench-*` stay owned by their lanes.
