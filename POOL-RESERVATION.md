@@ -1,48 +1,77 @@
-# Model Zoo reserved pool — for the WASM app + assembler + redteam gate
+# Model Zoo — per-app key reservation (2026-10-08)
 
-**User ask:** reserve free models for the model-zoo app with a rotating pool +
-paid fallbacks when quota is exhausted. This is the reservation spec.
+> **Per stack-master policy:** one key PER APP, assigned models, revoke old
+> keys. This file is the reservation manifest the stack master uses to create
+> keys + checkout/checkin quota via the new n8n pipelines.
 
-## The pool (free, rotating — in priority order)
+## Key currently in use (to be replaced)
+- **My tools read `LITELLM_MASTER_KEY`** from `B:\ai-stack\.env` (env-based,
+  passed to detached runs). That's the shared `opencoder` master key —
+  **should be revoked once app keys exist.**
 
-| Lane | Models (all verified working 2026-10-07/08) | Notes |
-|------|---------------------------------------------|-------|
-| **nyx local (free, no quota)** | `nyx-thinkingcap-v2`, `nyx-qwen25-1.5b`, `nyx-qwen2.5-7b`, `nyx-gpt-oss-20b`, `nyx-phi-4-mini`, `nyx-granite-4.1-8b`, `nyx-gemma-4-e4b` | our own GPU box; **preferred lane** (user: "use nyx more"); thinkingcap = teacher |
-| **Google tier-2 (free)** | `google-gemini-2-5-flash`, `google-gemini-3-1-flash-lite`, `google-gemini-3-5-flash-lite`, `google-gemini-3-6-flash`, `google-gemini-3-7-flash` | 150K/Unlimited RPD, ~2-4 RPM — slow steady lane |
-| **AIHubMix free** | `coding-glm-5.1-free`, `coding-minimax-m2.7-free`, `wayward-coding`, `agnes-flash` | 20 RPM/50 RPD each; rapid lane |
-| **Pools** | `free-flash-pool`, `wayward-minion` (rotate internally, $0) | proven 100% pass |
+## The per-app keys I want (3 apps)
 
-## Paid fallbacks (only if all free exhausted — $0.03-0.09/M)
+### 1. `pool-model-zoo` — the WASM app + assembler + frontend
+| Model | Lane | Why |
+|-------|------|-----|
+| `nyx-qwen25-1.5b` | nyx (free/our GPU) | assembler LLM plan (fast, verified) |
+| `nyx-thinkingcap-v2` | nyx | teacher distillation |
+| `google-gemini-3-6-flash` | Google free | star quality (TRACE 0.562) |
+| `google-gemini-3-1-flash-lite` | Google free | 2nd lane |
+| `free-flash-pool` | pool | rotating rapid lane |
+| `wayward-minion` | pool | rotating rapid lane |
+| `or-mistralai-mistral-nemo` | paid $0.03 | fallback |
+| `openai/gpt-oss-20b` | paid $0.09 | fallback + red-team target |
 
-| Model | $/M | Role |
-|-------|-----|------|
-| `or-mistralai-mistral-nemo` | 0.030 | general/summary/judge (registered alias) |
-| `or-inclusionai-ling-3.0-flash` | 0.063 | super-cheap flash |
-| `openai/gpt-oss-20b` | 0.090 | **the redteam target** + coding (also `gpt-oss-20b-free`, `nyx-gpt-oss-20b`, `ocloud-gpt-oss-20b`) |
+### 2. `pool-sweep` — corpus/bench (long-running sweeps)
+| Model | Why |
+|-------|-----|
+| `google-gemini-2-5-flash`, `3-5-flash-lite`, `3-7-flash` | full-budget corpus (verified 100%/372) |
+| `free-flash-pool`, `wayward-minion`, `agnes-flash` | pools |
+| `nyx-qwen2.5-7b` | our GPU big lane |
+| fallback: `or-mistralai-mistral-nemo`, `openai/gpt-oss-20b` | |
 
-> Note: last check `openai/gpt-oss-20b` returned 402 (combined budget
-> exhausted) — so the free-first order matters; paid only after.
+### 3. `pool-eval` — red-team + TRACE evals (short, frequent)
+| Model | Why |
+|-------|-----|
+| `nyx-qwen25-1.5b` | red-team target (F4 detected here) |
+| `openai/gpt-oss-20b` | the gptoss harness's target |
+| `google-gemini-3-6-flash` | TRACE eval reference |
+| fallback: `or-mistralai-mistral-nemo` | |
 
-## Works for the whole app
-- **WASM assembler LLM plan**: `nyx-qwen25-1.5b` (fast, free, verified)
-- **Teacher distillation**: `nyx-thinkingcap-v2` (D5 corpus built with it)
-- **Red-team eval gate**: `nyx-qwen25-1.5b` (F4 leakage detected) — swap
-  `--model openai/gpt-oss-20b` when quota clears
-- **Sweep/corpus**: `google-gemini-3-6-flash` (0.562 TRACE star) +
-  `free-flash-pool`
-
-## LiteLLM reservation (warden action)
-Create a virtual key for the app named `pool-model-zoo`:
-
-```bash
-lite keys generate --alias pool-model-zoo \
-  --models "nyx-thinkingcap-v2,nyx-qwen25-1.5b,google-gemini-3-6-flash,google-gemini-3-1-flash-lite,free-flash-pool,wayward-minion,coding-glm-5.1-free,or-mistralai-mistral-nemo,openai/gpt-oss-20b" \
-  --max-budget 1.00 --budget-duration 30d \
-  --model-max-budget 0.10:daily --model-max-budget 0.50:weekly --model-max-budget 1.00:monthly
-# fallbacks (cheap paid if free quota exhausted):
-rest_key <key> --budget-fallbacks "or-mistralai-mistral-nemo,openai/gpt-oss-20b"
+## Budget per key (tiered, $1/mo)
+```
+0.10 : daily   → 0.50 : weekly  → 1.00 : monthly   (cheap-paid fallback kicks in past the free bucket)
 ```
 
-Rotation: LiteLLM `cost-based-routing` already on → zero-cost leaves rotate
-first, paid fires only past the free bucket. New app pools follow the existing
-`alice1-poolside` pattern at the key level.
+## Warden commands (for stack master — exact)
+```bash
+# app: model-zoo
+lite keys generate --alias pool-model-zoo \
+  --models "nyx-qwen25-1.5b,nyx-thinkingcap-v2,google-gemini-3-6-flash,google-gemini-3-1-flash-lite,free-flash-pool,wayward-minion,or-mistralai-mistral-nemo,openai/gpt-oss-20b" \
+  --max-budget 1.00 --budget-duration 30d \
+  --model-max-budget 0.10:daily --model-max-budget 0.50:weekly --model-max-budget 1.00:monthly
+rest_key <key> --budget-fallbacks "or-mistralai-mistral-nemo,openai/gpt-oss-20b"
+
+# app: sweep
+lite keys generate --alias pool-sweep \
+  --models "google-gemini-2-5-flash,google-gemini-3-5-flash-lite,google-gemini-3-7-flash,free-flash-pool,wayward-minion,agnes-flash,nyx-qwen2.5-7b,or-mistralai-mistral-nemo" \
+  --max-budget 1.00 --budget-duration 30d --model-max-budget 0.10:daily
+
+# app: eval
+lite keys generate --alias pool-eval \
+  --models "nyx-qwen25-1.5b,openai/gpt-oss-20b,google-gemini-3-6-flash,or-mistralai-mistral-nemo" \
+  --max-budget 1.00 --budget-duration 30d --model-max-budget 0.10:daily
+```
+
+## Checkout/checkin (n8n quota pipeline)
+The n8n pipeline checks out a key+quota before a run and checks in after:
+- **checkout**: verify key `/v1/models` 200 + key budget remaining ≥ needed; mark
+  in-use in a ledger.
+- **run**: my tools set the key via env (`LITELLM_API_KEY=<app key>`), not master.
+- **checkin**: budget/spend snapshot → ledger, mark idle.
+- TODO: implement `tools/tm/key_lease.py` + n8n workflow (checkout/checkin).
+
+## Revoke list (after migration)
+`opencoder` (master, all-team-models) — the currently-shared key my tools read.
+Keep `alice1-poolside` (owned by alice-bot lane), `model-bench-*` (bench).

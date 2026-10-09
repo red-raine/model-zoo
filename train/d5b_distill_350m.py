@@ -11,8 +11,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")  # cp1252-emoji crash guard for MLflow
 
 TM = Path(r"E:\vibe_coding\dev\bitnet runner\tools\tm")
 sys.path.insert(0, str(TM))
