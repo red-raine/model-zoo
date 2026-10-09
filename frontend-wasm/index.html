@@ -24,6 +24,7 @@ richer 8-stage plan.</p>
 <textarea id="spec" placeholder='e.g. "build a 3b ternary coder distilled from deepseek traces" or "a tiny chat model"'>build a tiny coding model</textarea>
 <button onclick="runPlan()">Plan pipeline</button>
 <button onclick="runLLM()" style="background:#7c3aed">Ask LiteLLM agent (full plan)</button>
+<button onclick="forgetKey()" style="background:#555">Clear saved key</button>
 <div id="wasmNote"></div>
 
 <h3>Pipeline plan</h3>
@@ -74,11 +75,21 @@ async function runLLM() {
       body: JSON.stringify({model:"nyx-qwen25-1.5b", max_tokens:400, temperature:0.2,
         messages:[{role:"user", content:"You are the Model Zoo assembler. For: '"+spec+"' produce a concise ordered pipeline plan using stages: research -> recipe -> data -> version(dvc) -> train(trl) -> distill -> eval -> serve. 8 lines max."}]})});
     const d = await r.json();
+    if (r.status !== 200) { document.getElementById("out").textContent = "LiteLLM " + r.status + ": " + (d.error?.message || JSON.stringify(d)); return; }
     render({spec, intent:"llm", stages: (d.choices?.[0]?.message?.content||"").split("\n").filter(x=>x.trim()).slice(0,9).map(l=>({name:l.trim().replace(/^\d+[\.\)]\s*/,"").split(":")[0],"tool":"llm",notes:l.trim()})), recipe_refs:[]});
   } catch (e) { document.getElementById("out").textContent = "LLM error: "+e; }
 }
 
-window.addEventListener("load", ()=>{ LITELLM_KEY = prompt("LiteLLM API key (local proxy :4000):", "")||""; initWasm(); });
+window.addEventListener("load", ()=>{
+  LITELLM_KEY = localStorage.getItem("modelZooKey") || "";
+  if (!LITELLM_KEY) {
+    LITELLM_KEY = prompt("LiteLLM API key (local proxy :4000):", "") || "";
+    if (LITELLM_KEY) localStorage.setItem("modelZooKey", LITELLM_KEY);
+  }
+  initWasm();
+});
+// key change button (in case the saved key rotates/expires)
+window.forgetKey = function(){ localStorage.removeItem("modelZooKey"); LITELLM_KEY=""; location.reload(); };
 </script>
 <!-- Go wasm_exec runtime -->
 <script src="wasm_exec.js"></script>
