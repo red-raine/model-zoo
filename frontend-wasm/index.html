@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>model-zoo — the Model Zoo Builder</title>
+<style>
+  body { font-family: system-ui; max-width: 860px; margin: 2rem auto; padding: 0 1rem; background:#0f1115; color:#e6e6e6; }
+  h1 { font-size:1.4rem; }
+  textarea { width:100%; min-height:70px; background:#1a1d24; color:#fff; border:1px solid #333; border-radius:6px; padding:.6rem; }
+  button { background:#3b82f6; color:#fff; border:0; padding:.6rem 1.2rem; border-radius:6px; cursor:pointer; margin-top:.6rem; font-size:1rem;}
+  pre { background:#1a1d24; padding:1rem; border-radius:8px; overflow:auto; white-space:pre-wrap; }
+  .stage { border-left:3px solid #3b82f6; padding:.3rem .8rem; margin:.35rem 0; background:#14161c; }
+  .tag { color:#8b5cf6; }
+  footer { margin-top:2rem; font-size:.8rem; color:#888; }
+  #wasmNote { color:#22c55e; font-size:.8rem; }
+</style>
+</head>
+<body>
+<h1>🧪 model-zoo — the Model Zoo Builder</h1>
+<p>Describe a model. The <span class="tag">WASM assembler</span> builds the stage
+chain; optionally ask your local <span class="tag">LiteLLM</span> agent for the
+richer 8-stage plan.</p>
+
+<textarea id="spec" placeholder='e.g. "build a 3b ternary coder distilled from deepseek traces" or "a tiny chat model"'>build a tiny coding model</textarea>
+<button onclick="runPlan()">Plan pipeline</button>
+<button onclick="runLLM()" style="background:#7c3aed">Ask LiteLLM agent (full plan)</button>
+<div id="wasmNote"></div>
+
+<h3>Pipeline plan</h3>
+<pre id="out">(WASM loaded — type a spec above)</pre>
+
+<script>
+// -- Go-WASM bootstrap hook (asmPlan defined by wasm_exec.js + asm.wasm)
+let wasmReady = false;
+async function initWasm() {
+  if (typeof asmPlan !== "undefined") { wasmReady = true; document.getElementById("wasmNote").textContent = "✓ WASM assembler loaded"; return; }
+  try {
+    const go = new Go();
+    const inst = await WebAssembly.instantiateStreaming(fetch("asm.wasm"), go.importObject);
+    go.run(inst.instance);
+    wasmReady = true;
+    document.getElementById("wasmNote").textContent = "✓ WASM assembler loaded";
+  } catch (e) {
+    document.getElementById("wasmNote").textContent = "✗ wasm not loadable: " + e;
+  }
+}
+
+const ASM_ENDPOINT = "http://localhost:4000/v1/chat/completions"; // LiteLLM
+let LITELLM_KEY = ""; // set below via fetch of local env (best-effort), else prompt
+
+function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+
+function render(p) {
+  let h = `<div><b>intent:</b> <span class="tag">${esc(p.intent||"default")}</span> · <b>spec:</b> ${esc(p.spec)}</div>`;
+  (p.stages||[]).forEach(s => { h += `<div class="stage">${esc(s.name)} <span style="float:right;color:#888">${esc(s.cost)}</span><div style="color:#aaa;font-size:.85rem">${esc(s.tool)} — ${esc(s.notes)}</div></div>`; });
+  if (p.recipe_refs) h += `<div style="margin-top:.5rem">recipes: ${esc(p.recipe_refs.join(", "))}</div>`;
+  document.getElementById("out").innerHTML = h;
+}
+
+function runPlan() {
+  const spec = document.getElementById("spec").value;
+  if (wasmReady && typeof asmPlan === "function") {
+    render(JSON.parse(asmPlan(spec)));
+  } else {
+    document.getElementById("out").textContent = JSON.stringify({spec, stages:[{name:"spec",tool:"wasm-not-loaded"}]}, null, 2);
+  }
+}
+
+async function runLLM() {
+  const spec = document.getElementById("spec").value;
+  document.getElementById("out").textContent = "asking LiteLLM...";
+  try {
+    const r = await fetch(ASM_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+LITELLM_KEY},
+      body: JSON.stringify({model:"nyx-qwen25-1.5b", max_tokens:400, temperature:0.2,
+        messages:[{role:"user", content:"You are the Model Zoo assembler. For: '"+spec+"' produce a concise ordered pipeline plan using stages: research -> recipe -> data -> version(dvc) -> train(trl) -> distill -> eval -> serve. 8 lines max."}]})});
+    const d = await r.json();
+    render({spec, intent:"llm", stages: (d.choices?.[0]?.message?.content||"").split("\n").filter(x=>x.trim()).slice(0,9).map(l=>({name:l.trim().replace(/^\d+[\.\)]\s*/,"").split(":")[0],"tool":"llm",notes:l.trim()})), recipe_refs:[]});
+  } catch (e) { document.getElementById("out").textContent = "LLM error: "+e; }
+}
+
+window.addEventListener("load", ()=>{ LITELLM_KEY = prompt("LiteLLM API key (local proxy :4000):", "")||""; initWasm(); });
+</script>
+<!-- Go wasm_exec runtime -->
+<script src="wasm_exec.js"></script>
+<footer>model-zoo · frontend-wasm · D7 · assembler.brain = Go→WASM · LLM plan = nyx via LiteLLM</footer>
+</body>
+</html>
