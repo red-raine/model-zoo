@@ -16,9 +16,9 @@ paid fallbacks when quota is exhausted. This is the reservation spec.
 
 | Model | $/M | Role |
 |-------|-----|------|
-| `mistralai/mistral-nemo` | 0.030 | general/summary/judge |
-| `inclusionai/ling-3.0-flash` | 0.063 | super-cheap flash |
-| `openai/gpt-oss-20b` | 0.090 | **the redteam target** + coding |
+| `or-mistralai-mistral-nemo` | 0.030 | general/summary/judge (registered alias) |
+| `or-inclusionai-ling-3.0-flash` | 0.063 | super-cheap flash |
+| `openai/gpt-oss-20b` | 0.090 | **the redteam target** + coding (also `gpt-oss-20b-free`, `nyx-gpt-oss-20b`, `ocloud-gpt-oss-20b`) |
 
 > Note: last check `openai/gpt-oss-20b` returned 402 (combined budget
 > exhausted) — so the free-first order matters; paid only after.
@@ -36,11 +36,11 @@ Create a virtual key for the app named `pool-model-zoo`:
 
 ```bash
 lite keys generate --alias pool-model-zoo \
-  --models "nyx-thinkingcap-v2,nyx-qwen25-1.5b,google-gemini-3-6-flash,google-gemini-3-1-flash-lite,free-flash-pool,wayward-minion,coding-glm-5.1-free,mistralai/mistral-nemo,openai/gpt-oss-20b" \
+  --models "nyx-thinkingcap-v2,nyx-qwen25-1.5b,google-gemini-3-6-flash,google-gemini-3-1-flash-lite,free-flash-pool,wayward-minion,coding-glm-5.1-free,or-mistralai-mistral-nemo,openai/gpt-oss-20b" \
   --max-budget 1.00 --budget-duration 30d \
   --model-max-budget 0.10:daily --model-max-budget 0.50:weekly --model-max-budget 1.00:monthly
 # fallbacks (cheap paid if free quota exhausted):
-rest_key <key> --budget-fallbacks "mistralai/mistral-nemo,openai/gpt-oss-20b"
+rest_key <key> --budget-fallbacks "or-mistralai-mistral-nemo,openai/gpt-oss-20b"
 ```
 
 Rotation: LiteLLM `cost-based-routing` already on → zero-cost leaves rotate
