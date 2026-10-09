@@ -30,10 +30,12 @@ RPM = 30  # nyx local = no provider 429s; keep it modest
 
 
 def _key() -> str:
-    for line in open(r"B:\ai-stack\.env", encoding="utf-8", errors="replace"):
-        if line.startswith("LITELLM_MASTER_KEY="):
-            return line.strip().split("=", 1)[1].strip()
-    raise RuntimeError("no LITELLM_MASTER_KEY")
+    # CONSTITUTIONAL LAW: per-app key via key_store, NEVER master key.
+    from key_store import get_key
+    try:
+        return get_key("pool-model-zoo")
+    except KeyError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def teach(prompt: str, model: str, key: str, retries: int = 2) -> dict:

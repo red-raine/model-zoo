@@ -42,10 +42,14 @@ class LtClient:
 
     @staticmethod
     def _key() -> str:
-        for line in open(r"B:\ai-stack\.env", encoding="utf-8", errors="replace"):
-            if line.startswith("LITELLM_MASTER_KEY="):
-                return line.strip().split("=", 1)[1].strip()
-        return ""
+        # CONSTITUTIONAL LAW: per-app key via key_store, NEVER master key.
+        import sys as _s
+        _s.path.insert(0, r"E:\vibe_coding\dev\bitnet runner\tools\tm")
+        try:
+            from key_store import get_key
+            return get_key("pool-eval")
+        except Exception:
+            return ""
 
     def generate(self, prompt: str, max_tokens: int = 512,
                  temperature: float = 0.7, seed: int | None = None) -> str:
