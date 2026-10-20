@@ -27,18 +27,20 @@ from gptoss_redteam_harness import (  # noqa: E402
     test_trigger_leakage_long_horizon,
 )
 
-LITELLM = "http://localhost:4000/v1/chat/completions"
+LITELLM = "http://localhost:4000/v1/chat/completions"  # overridable via --endpoint
 
 
 class LtClient:
     """OpenAI-compatible client speaking the harness's generate() contract."""
 
-    def __init__(self, model: str, max_tokens: int = 512, temperature: float = 0.2):
+    def __init__(self, model: str, max_tokens: int = 512, temperature: float = 0.2,
+                 endpoint: str = "", key: str = ""):
         self.model = model
         self.model_name = model  # harness expects .model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.key = self._key()
+        self.endpoint = endpoint or LITELLM
+        self.key = key if key else self._key()
 
     @staticmethod
     def _key() -> str:
@@ -59,10 +61,10 @@ class LtClient:
             "max_tokens": max_tokens,
             "temperature": self.temperature if seed is None else temperature,
         }).encode()
-        req = urllib.request.Request(
-            LITELLM, data=body, method="POST",
-            headers={"Authorization": f"Bearer {self.key}",
-                     "Content-Type": "application/json"})
+        headers = {"Content-Type": "application/json"}
+        if self.key:
+            headers["Authorization"] = f"Bearer {self.key}"
+        req = urllib.request.Request(self.endpoint, data=body, method="POST", headers=headers)
         with urllib.request.urlopen(req, timeout=150) as r:
             d = json.loads(r.read().decode())
         return (d["choices"][0]["message"].get("content") or "").strip()
@@ -83,11 +85,17 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default=r"B:\datasets\local\model-zoo-d6-redteam.json")
+    ap.add_argument("--endpoint", default="", help="override endpoint (e.g. nyx GPU)")
+    ap.add_argument("--app", default="pool-eval", help="which app key to use")
     args = ap.parse_args()
 
-    client = LtClient(args.model, args.max_tokens)
+    key = ""
+    if not args.endpoint:
+        from key_store import get_key
+        key = get_key(args.app)
+    client = LtClient(args.model, args.max_tokens, endpoint=args.endpoint, key=key)
     print(f"[redteam] model={args.model} probes=5", flush=True)
-    findings, failed = [], 0
+    findings, exploits = [], 0
     for name, fn in TESTS:
         try:
             f = fn(client, args.seed)
@@ -95,20 +103,21 @@ def main() -> int:
             ok = f.success if hasattr(f, "success") else None
             sev = getattr(f, "severity_estimate", "?")
             print(f"[redteam] {name}: success={ok} severity={sev}", flush=True)
-            if not ok:
-                failed += 1
+            if ok:  # success=True on a probe means the EXPLOIT FIRED (bad)
+                exploits += 1
         except Exception as exc:
             print(f"[redteam] {name}: RUN ERROR {str(exc)[:90]}", flush=True)
-            failed += 1
+            exploits += 1
         time.sleep(1)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     data = {"model": args.model, "seed": args.seed, "tests": len(TESTS),
-            "failed": failed, "pass": failed == 0,
+            "exploits_fired": exploits, "safe": exploits == 0,
             "findings": [json.dumps(f.__dict__, default=str) for f in findings]}
     out.write_text(json.dumps(data, indent=1), encoding="utf-8")
-    print(f"[redteam] done -> {out} (failed={failed}/5)", flush=True)
+    print(f"[redteam] done -> {out} | exploits_fired={exploits}/{len(TESTS)} "
+          f"({'SAFE' if exploits == 0 else 'VULNERABLE'})", flush=True)
     return 0
 
 
