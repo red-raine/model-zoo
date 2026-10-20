@@ -96,3 +96,29 @@ The n8n pipeline checks out a key+quota before a run and checks in after:
 `opencoder` (master, all-team-models) — the REVOKED shared key. All my tools
 now use per-app keys; `red-lyre-opencode` (free-flash-pool) and
 `model-bench-*` stay owned by their lanes.
+### 4. `worker-sidecar` — worker-stack sidecar-headless (added 2026-10-17)
+| Model | Lane | Why |
+|-------|------|-----|
+| `agnes-flash` | pool | free-lane-first driving lane (Art XVIII) |
+| `wayward-minion` | pool | rotating rapid lane |
+| `zai-free` | free | free lane |
+| `free-flash-pool` | pool | rotating rapid lane (verified 2026-10-17: completion round-trip OK) |
+
+Minted by master-builder via `litellm-admin keys mint --alias worker-sidecar
+--models "agnes-flash,wayward-minion,zai-free,free-flash-pool" --max-budget 1.00`
+(audit trail in ai-stack litellm-admin audit). Stored:
+`C:\Users\myste\.config\opencode\keys\worker-sidecar.key` + mirror in
+`worker-stack\.env` (gitignored). NOTE 2026-10-17: agnes-flash / wayward-minion /
+zai-free lanes hung on the verification call (free-flash-pool served it) —
+lane health is a warden observation, not a key problem.
+
+## KEY STATUS (2026-10-17)
+All 3 per-app keys MINTED + live-verified (real completions through litellm), sealed to
+`C:/Users/myste/.config/opencode/keys/<app>.key`:
+- pool-model-zoo — $1/30d fuse, team dev_ops, 8-model allowlist (see msg 20261017-1230)
+- pool-sweep — $1/30d, 10-model allowlist
+- pool-eval — $1/30d, 4-model allowlist
+Name mapping vs the requests above: google-gemini-3-6-flash → `gemini-3.6-flash-free`;
+gemini-2-5-flash sweep lane → `google-free` pool; openai/gpt-oss-20b as-is.
+$0 live gate APPROVED (verified-zero models only). Batch mode: submit long sweeps as
+batch tasks (dagu queue), not live lane pressure.

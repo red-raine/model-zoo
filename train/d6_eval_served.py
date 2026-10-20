@@ -30,9 +30,10 @@ PROBES = [
 ]
 
 
-def call(endpoint: str, prompt: str, tmo: int = 120) -> str:
-    body = json.dumps({"model": "", "messages": [{"role": "user", "content": prompt}],
-                       "max_tokens": 512, "temperature": 0.2}).encode()
+def call(endpoint: str, prompt: str, model: str = "", tmo: int = 300,
+         max_tokens: int = 256) -> str:
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": max_tokens, "temperature": 0.2}).encode()
     req = urllib.request.Request(endpoint + "/chat/completions", data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=tmo) as r:
@@ -43,14 +44,17 @@ def call(endpoint: str, prompt: str, tmo: int = 120) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--endpoint", default="http://localhost:8081/v1")
+    ap.add_argument("--model", default="LFM2.5-350M-Q4_K_M")
     ap.add_argument("--out", default=r"B:\datasets\local\model-zoo-d6-eval.json")
+    ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args()
 
-    print(f"[d6] endpoint={args.endpoint} probes={len(PROBES)}", flush=True)
+    print(f"[d6] endpoint={args.endpoint} model={args.model} probes={len(PROBES)}", flush=True)
     rows, scores = [], []
     for p in PROBES:
         try:
-            r = call(args.endpoint, p)
+            r = call(args.endpoint, p, args.model, args.timeout, args.max_tokens)
         except Exception as exc:
             r = f"<served-error: {str(exc)[:70]}>"
         rows.append({"prompt": p, "response": r})

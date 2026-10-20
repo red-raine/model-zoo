@@ -47,7 +47,10 @@ async function initWasm() {
 }
 
 const ASM_ENDPOINT = "http://localhost:4000/v1/chat/completions"; // LiteLLM
-let LITELLM_KEY = ""; // set below via fetch of local env (best-effort), else prompt
+// Default key from stack-master handoff (OPENCODE-POOL-HANDOFF.md 2026-10-20):
+// pool-model-zoo virtual key, $1/mo fuse, free-first. Override via localStorage.
+const DEFAULT_KEY = "sk-09ad9ac160ae0cd21e4763ec315f68eca1dbd5d0d58a0e00";
+let LITELLM_KEY = "";
 
 function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
 
@@ -81,10 +84,11 @@ async function runLLM() {
 }
 
 window.addEventListener("load", ()=>{
-  LITELLM_KEY = localStorage.getItem("modelZooKey") || "";
+  LITELLM_KEY = localStorage.getItem("modelZooKey") || DEFAULT_KEY;
+  // 3 keys from OPENCODE-POOL-HANDOFF.md: pool-model-zoo (primary), pool-sweep, pool-eval
   if (!LITELLM_KEY) {
-    LITELLM_KEY = prompt("LiteLLM API key (local proxy :4000):", "") || "";
-    if (LITELLM_KEY) localStorage.setItem("modelZooKey", LITELLM_KEY);
+    LITELLM_KEY = DEFAULT_KEY; // no prompt — key is pre-reserved by stack master
+    localStorage.setItem("modelZooKey", LITELLM_KEY);
   }
   initWasm();
 });
