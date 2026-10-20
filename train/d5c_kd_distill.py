@@ -59,14 +59,17 @@ def build_dataset(rows_wanted: int) -> int:
                 prompt = (d.get("prompt") or "").strip()
                 resp = (d.get("response") or "").strip()
                 if len(prompt) > 20 and len(resp) > 150:
-                    pairs.append({"prompt": prompt[:800], "completion": resp[:1600]})
+                    pairs.append({"messages": [
+                        {"role": "user", "content": prompt[:800]},
+                        {"role": "assistant", "content": resp[:1600]},
+                    ]})
                 if len(pairs) >= rows_wanted * 2:
                     break
         if len(pairs) >= rows_wanted * 2:
             break
 
     # prefer longer (richer) answers, then cap
-    pairs.sort(key=lambda p: -len(p["completion"]))
+    pairs.sort(key=lambda p: -len(p["messages"][1]["content"]))
     pairs = pairs[:rows_wanted]
     DATA.parent.mkdir(parents=True, exist_ok=True)
     with DATA.open("w", encoding="utf-8") as fh:
@@ -117,7 +120,6 @@ def main() -> int:
         fp16=False,
         bf16=False,
         use_cpu=True,
-        dataset_text_field="completion",
         lmbda=0.5,          # 50/50 JSD (KD) + SFT — the hybrid D7 recommends
         beta=0.5,           # temperature for softening teacher logits
         temperature=0.9,

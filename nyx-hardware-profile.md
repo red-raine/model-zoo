@@ -55,3 +55,38 @@ fallback (it's what CE does today).
 - Verified via `ssh pool-crysal-eyes@192.168.8.237` (2026-10-20).
 - Prior wrong claim appeared in `knowledge/model-zoo-d6-result.md` context and
   the D7 run notes — this file supersedes it.
+## Concrete GPU enablement recipe (2026 research)
+
+**Official prebuilt Intel SYCL image exists** — no source build needed:
+```
+ghcr.io/ggml-org/llama.cpp:server-intel-b9144
+```
+
+Run it with the Arc GPU device nodes passed through and full offload:
+```bash
+docker run -d --name llama-arc \
+  --device /dev/dri \
+  --device /dev/accel \
+  -v /models:/models:ro \
+  -p 8082:8080 \
+  ghcr.io/ggml-org/llama.cpp:server-intel-b9144 \
+  --model /models/<model>.gguf --host 0.0.0.0 --port 8080 \
+  -ngl 99 --jinja
+```
+
+Verify GPU is actually used: docker exec llama-arc sycl-ls (should list the Arc
+device), then intel_gpu_top on the host during a request should show engine
+busy (not 0%).
+
+Notes from the 2026 sources:
+- SYCL needs Intel MKL's SYCL BLAS → the **oneAPI Toolkit** (hence the official
+  Intel image; plain ubuntu + dpclang does not work).
+- oneAPI **2026.1** improves SYCL build perf ~3.1x (prompt 434 → 1331 t/s on Arc).
+- Pin the image tag (avoid latest; known regressions exist per model).
+- For iGPU (Arc 140T on Ultra 9 285H) use --device /dev/dri + -ngl 99;
+  check ReBAR is enabled for best throughput.
+
+**Who should do this:** nyx runs a shared stack (other users' llama-server
+instances). Adding a GPU container is a stack-warden action — do NOT replace the
+existing CPU servers; add llama-arc alongside on a new port (8082) and route
+model-zoo evals to it.

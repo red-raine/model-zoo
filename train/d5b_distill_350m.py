@@ -29,6 +29,10 @@ MLFLOW_URI = "http://127.0.0.1:5000"
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=4)
+    ap.add_argument("--data", default=str(GOLD))
+    ap.add_argument("--max-length", type=int, default=768)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--lora-r", type=int, default=8)
     ap.add_argument("--rows", type=int, default=24)
     args = ap.parse_args()
 
@@ -42,9 +46,9 @@ def main() -> int:
     mlflow.set_tracking_uri(MLFLOW_URI)
     mlflow.set_experiment("model-zoo-d5b-distill")
 
-    print(f"[d5b] student={BASE} teacher_gold={GOLD} steps={args.steps} rows={args.rows}", flush=True)
+    print(f"[d5b] student={BASE} data={args.data} steps={args.steps} rows={args.rows}", flush=True)
 
-    ds = load_dataset("json", data_files=str(GOLD), split="train")
+    ds = load_dataset("json", data_files=args.data, split="train")
     ds = ds.select(range(min(len(ds), args.rows)))
     print(f"[d5b] sliced to {len(ds)} rows (cols: {ds.column_names})", flush=True)
 
@@ -57,15 +61,15 @@ def main() -> int:
         output_dir=str(OUT),
         per_device_train_batch_size=1,
         max_steps=args.steps,
-        learning_rate=3e-4,
-        max_length=768,
+        learning_rate=args.lr,
+        max_length=args.max_length,
         logging_steps=1,
         save_steps=args.steps,
         report_to=[],
         fp16=False,
         use_cpu=True,
     )
-    lora = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"],
+    lora = LoraConfig(r=args.lora_r, lora_alpha=args.lora_r*2, target_modules=["q_proj", "v_proj"],
                       lora_dropout=0.05, bias="none")
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds,
                          peft_config=lora, processing_class=tok)

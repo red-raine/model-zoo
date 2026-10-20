@@ -56,3 +56,32 @@ correct, honest outcome for a proof-of-pipeline run, not a quality run.
 - `B:\datasets\local\model-zoo-d5b-merged\` (merged HF)
 - `B:\datasets\local\model-zoo-d5b-student-f16.gguf` (709MB)
 - `B:\ai-stack\models\llama\models.ini` (+ our preset entry)
+## D5C — soft-logit KD attempt (2026-10-20, honest failure)
+
+**Tried:** 	rl.GKDTrainer with teacher LFM2.5-1.2B-Instruct → student
+LFM2.5-350M (same tokenizer family, so logit alignment is valid), lmbda=0.5
+(50/50 JSD + SFT), 48 real v6 rows, 6 steps, MLflow-tracked.
+
+**Result: NOT viable on CPU.** It loaded both models (~4.2 GB) then sat at
+step 0/6 for ~20 minutes with only one core busy. The blocker is structural:
+
+- GKD's JSD loss needs **full logit distributions** from BOTH models:
+  65536 vocab × 384 seq × 2 models in fp32 ≈ 100+ MB per forward, and the
+  divergence is computed over that whole tensor each step.
+- On CPU that is 10-50x the cost of plain SFT, and it doesn't parallelize well
+  (one core pegged).
+
+**Conclusion (honest):** soft-logit KD requires a GPU. Two viable paths:
+
+1. **Sequence-level KD on CPU (works today)** — teacher generates targets, the
+   student does plain SFT on them. This is exactly what d5_teach_gold.py
+   (nyx-thinkingcap-v2 teacher) + d5b_distill_350m.py already do, and it
+   finished in ~1.5 h for 3 steps.
+2. **Soft-logit KD on nyx Arc GPU** — once the SYCL llama.cpp/oneAPI stack is
+   in place (see 
+yx-hardware-profile.md), run GKD there. GPU makes the
+   logit math cheap.
+
+**Also learned:** GKDTrainer requires a conversational dataset
+(messages: [{role, content}]), not prompt/completion — the first run
+failed on KeyError: 'messages'.
