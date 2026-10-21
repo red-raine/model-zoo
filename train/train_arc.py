@@ -17,10 +17,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+# Make `tools/data/gate.py` importable regardless of CWD.
+_TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
 
 
 def main() -> int:
@@ -32,8 +38,19 @@ def main() -> int:
     ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--lora-r", type=int, default=16)
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--model", default="LiquidAI/LFM2.5-350M")
     args = ap.parse_args()
+
+    # --- FORGE GATE (chokepoint) ------------------------------------------
+    # Refuse to train on a corpus that has no CLEAN gate file. This lives in
+    # the trainer, not a wrapper, so bypassing the wrapper cannot bypass this.
+    from data.gate import guard as forge_gate_guard, GateError
+    try:
+        forge_gate_guard(args.data)
+    except GateError as exc:
+        print(f"\n[arc] TRAINING REFUSED\n{exc}\n", flush=True)
+        return 2
 
     import torch
     from datasets import load_dataset
@@ -41,7 +58,9 @@ def main() -> int:
     from unsloth import FastLanguageModel
 
     dev = "xpu" if torch.xpu.is_available() else "cpu"
-    print(f"[arc] device={dev} model={args.model} steps={args.steps}", flush=True)
+    print(f"[arc] device={dev} model={args.model} steps={args.steps} "
+          f"seed={args.seed} max_len={args.max_len} rows={args.rows}", flush=True)
+    torch.manual_seed(args.seed)
     if dev == "xpu":
         print(f"[arc] GPU: {torch.xpu.get_device_name(0)}", flush=True)
 
@@ -58,7 +77,7 @@ def main() -> int:
         lora_dropout=0.05,
         bias="none",
         use_gradient_checkpointing="unsloth",
-        random_state=42,
+        random_state=args.seed,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
     )
@@ -86,6 +105,8 @@ def main() -> int:
         optim="adamw_torch",
         dataloader_num_workers=0,
         remove_unused_columns=False,
+        seed=args.seed,
+        data_seed=args.seed,
         dataset_text_field="text",
         max_length=args.max_len,
     )
@@ -108,7 +129,8 @@ def main() -> int:
         json.dump({"loss": loss, "seconds": round(dur, 1),
                    "steps_per_min": round(sps * 60, 2),
                    "device": dev, "model": args.model,
-                   "rows": len(ds), "steps": args.steps}, fh, indent=1)
+                   "rows": len(ds), "steps": args.steps,
+                   "seed": args.seed, "max_len": args.max_len}, fh, indent=1)
     print(f"[arc] adapter -> {out}", flush=True)
     return 0
 
