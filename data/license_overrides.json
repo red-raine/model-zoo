@@ -1,0 +1,40 @@
+{
+  "_comment": "Manual license overrides. Only add an entry with stated evidence. Everything else is resolved from sources.py, local LICENSE files, or the HF API. Unresolved sources are tagged commercial=unknown (policy: internal-only).",
+  "_aliases": {
+    "_comment": "short source label used inside corpora -> real HuggingFace repo id, for HF API lookup",
+    "emotions-detection-text-dataset": "abhrajaiswal/emotions-detection-text-dataset",
+    "humanai-social-cognitive": "willianoliveiragibin/humanai-social-cognitive",
+    "Amod/mental_health_counseling_conversations": "Amod/mental_health_counseling_conversations",
+    "ruggsea/stanford-encyclopedia-of-philosophy_instruct": "ruggsea/stanford-encyclopedia-of-philosophy_instruct",
+    "Jackrong/Kimi-K2.5-Reasoning-1M-Cleaned": "Jackrong/Kimi-K2.5-Reasoning-1M-Cleaned",
+    "nohurry/Opus-4.6-Reasoning-3000x-filtered": "nohurry/Opus-4.6-Reasoning-3000x-filtered",
+    "samhog/psychology-10k": "samhog/psychology-10k",
+    "aizenSosuke/hope_therapy_conversation_transcripts": "aizenSosuke/hope_therapy_conversation_transcripts",
+    "michelleyunun/therapydata": "michelleyunun/therapydata",
+    "fadodr/mental_health_therapy": "fadodr/mental_health_therapy"
+  },
+  "?": {
+    "license": "unknown",
+    "evidence": "rows with no `source` field (e.g. model-zoo-v6-sft-all.jsonl carries prompt/completion/model only)",
+    "verified": false,
+    "note": "GENERATED traces: outputs of free-tier teacher models. Output-ToS-sensitive, not a dataset license. Provenance must be rebuilt from the trace ledger."
+  },
+  "cleaned": {
+    "license": "unknown",
+    "evidence": "generic bucket label written by the EQ cleanup scripts; no upstream repo id survives in the row",
+    "verified": false,
+    "note": "PROVENANCE FAILURE: 1,608 spine rows carry source='cleaned'. Must be resolved back to upstream or dropped."
+  },
+  "Amod/mental_health_counseling_conversations": {
+    "license": "RAIL-D",
+    "evidence": "B:\\datasets\\raw\\Amod-mental-health-counseling\\LICENSE-RAIL-D.txt present on disk",
+    "verified": true,
+    "note": "RAIL-D use restrictions — review before any distribution"
+  },
+  "ruggsea/stanford-encyclopedia-of-philosophy_instruct": {
+    "license": "other",
+    "evidence": "same upstream corpus as AiresPucrs/stanford-encyclopedia-philosophy, which sources.py marks license=other with note 'humanities CPT; license vague - clear before commercial'",
+    "verified": false,
+    "note": "SEP content is (c) Stanford Metaphysics Research Lab; treat as non-commercial until cleared"
+  }
+}
