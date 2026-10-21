@@ -122,3 +122,29 @@ Name mapping vs the requests above: google-gemini-3-6-flash → `gemini-3.6-flas
 gemini-2-5-flash sweep lane → `google-free` pool; openai/gpt-oss-20b as-is.
 $0 live gate APPROVED (verified-zero models only). Batch mode: submit long sweeps as
 batch tasks (dagu queue), not live lane pressure.
+
+---
+
+## App: `pool-tinyfish` (2026-10-21)
+
+- **Purpose:** web search + fetch for the reasoning/fact-checking SDK (`tools/verify/`).
+- **Key file:** `C:\Users\myste\.config\opencode\keys\pool-tinyfish.key`
+- **Key sha256 prefix:** `ABF52EA3B0C4B26B` (verify with this, never echo the value)
+- **Status:** stored; NOT yet wired into any code path.
+- **Quota:** unknown — must be read from the TinyFish wallet before first use
+  (`tools["tinyfish"].get_wallet()`).
+
+### !! ROTATION REQUIRED
+The key was pasted in plaintext into an agent conversation on 2026-10-21, so it is
+present in a transcript. Treat it as **compromised**. Rotate it, then re-store with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "E:\vibe_coding\dev\bitnet runner\tools\tm\askpass.ps1" -App pool-tinyfish
+```
+
+### Conflict note (recorded deliberately)
+`llm4free` (OEvortex) was proposed as a fallback. It is **rejected**: its keyless tier
+calls reverse-engineered consumer endpoints (its own `LEGAL_NOTICE.md` says
+"educational purposes only", repo topic `reverse-engineering`). Adopting it would put
+unrequested, untracked endpoints inside a stack that has an explicit key-governance
+law. The ToS-clean equivalent is LiteLLM :4000, which is already running.
