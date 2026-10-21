@@ -95,27 +95,112 @@ _LEAD = re.compile(r"^(?:and|but|so|then|also|however|therefore|moreover|"
 _CONJ = re.compile(r"\b(?:and|but|because|which|while|so that|although)\b", re.I)
 
 
-def _query_for(claim: str) -> list[str]:
-    """Progressive queries: full claim, then clause, then head words.
+_TOKEN = re.compile(r"[A-Za-z][\w'\-]*")
+_STOP_Q = set("""the a an and or but of to in on at for with from by as is are was were
+be been being it this that these those he she they we you i not no than then there
+their its which who whom whose what when where why how all any both each few more
+most other some such only own same very just now also into about over under again
+were was been""".split())
 
-    Searching the whole sentence returned 0 results for
-    "Delaware is located in China and borders the Yellow River" because of the
-    conjunction. A clause query finds sources.
+
+def entities(claim: str) -> list[str]:
+    """Capitalised phrases = the things worth looking up.
+
+    Measured: searching the whole claim "Reagan and Give Us Our Skeletons were
+    both documentaries" made Wikipedia return Michael Jackson, RoboCop and
+    "Internment of Japanese Americans". The claim is a sentence; a search engine
+    wants names. Splitting on "and" keeps two entities apart instead of gluing
+    them into one unsearchable string.
     """
-    q = _LEAD.sub("", claim.strip().rstrip(".!?")).strip()
-    cands = [q]
-    m = _CONJ.search(q)
-    if m and m.start() > 12:
-        cands.append(q[: m.start()].strip())
-    words = q.split()
-    if len(words) > 7:
-        cands.append(" ".join(words[:7]))
-    seen, out = set(), []
-    for cand in cands:
-        if cand and cand.lower() not in seen:
-            seen.add(cand.lower())
-            out.append(cand)
+    out = []
+    for part in re.split(r"\band\b|\bor\b|[,;]", claim):
+        cur = []
+        for tok in _TOKEN.findall(part):
+            if tok[0].isupper():
+                cur.append(tok)
+            else:
+                if cur:
+                    out.append(" ".join(cur))
+                    cur = []
+        if cur:
+            out.append(" ".join(cur))
+    seen, uniq = set(), []
+    for e in out:
+        e = e.strip()
+        if len(e) > 2 and e.lower() not in seen:
+            seen.add(e.lower())
+            uniq.append(e)
+    return uniq
+
+
+def predicate_terms(claim: str) -> list[str]:
+    """Content words left after removing entities and stopwords."""
+    ents = {w.lower() for e in entities(claim) for w in e.split()}
+    toks = [t.lower() for t in _TOKEN.findall(claim)]
+    return [t for t in toks if t not in _STOP_Q and t not in ents and len(t) > 2]
+
+
+def _singular(word: str) -> str:
+    w = word.strip()
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith("ses") and len(w) > 4:
+        return w[:-2]
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def split_conjunction(claim: str) -> list[str]:
+    """Split "A and B are both X" into one atomic claim per entity.
+
+    Measured failure: "Reagan and Give Us Our Skeletons were both documentaries"
+    was judged CONTRADICTED, because the evidence retrieved for the query
+    "Reagan documentaries" is about the 2024 Reagan *biopic*, not the 2011
+    documentary. Judging a two-entity claim against one entity's evidence is
+    invalid no matter how good the judge is.
+
+    Atomic claims are the standard fix (LORA/Loki decompose; Factool aggregates
+    by conjunction). Returns [claim] unchanged when there is nothing to split.
+    """
+    ents = entities(claim)
+    if len(ents) < 2:
+        return [claim]
+    preds = predicate_terms(claim)
+    if not preds:
+        return [claim]
+    head = _singular(preds[0])
+    out = []
+    for e in ents:
+        out.append(f"{e} is a {head}" if not head.endswith("s") else f"{e} is {head}")
     return out
+
+
+def _query_for(claim: str) -> list[str]:
+    """Progressive queries: entity+predicate, then entity alone, then the claim.
+
+    Never the verbatim claim first: a sentence is not a query.
+    """
+    cands = []
+    ents = entities(claim)
+    preds = predicate_terms(claim)
+    head = preds[0] if preds else ""
+    for e in ents:
+        if head:
+            cands.append(f"{e} {head}")
+    for e in ents:
+        cands.append(e)
+    if head:
+        cands.append(head)
+    cands.append(_LEAD.sub("", claim.strip().rstrip(".!?")))
+
+    seen, out = set(), []
+    for q in cands:
+        q = q.strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            out.append(q)
+    return out[:6]
 
 
 
@@ -125,45 +210,50 @@ def _query_for(claim: str) -> list[str]:
 # Web search is the WRONG tool for "Delaware is in China": searching a false
 # claim returns pages about the topic, not pages refuting it. Wikidata answers
 # it exactly -- Delaware P17 (country) = United States.
+#
+# NOTE: this block was accidentally deleted once when replacing _query_for.
+# Keep it BELOW _query_for and ABOVE search, and run the self-test after any
+# edit to that region.
 # ---------------------------------------------------------------------------
 
 WD_API = "https://www.wikidata.org/w/api.php"
 WD_SPARQL = "https://query.wikidata.org/sparql"
-_UA = {"User-Agent": "forge-factcheck/1.0 (research; local model zoo)"}
+_WD_UA = {"User-Agent": "forge-factcheck/1.0 (research; local model zoo)"}
 
 _IN_LOC = re.compile(
     r"^(?:the\s+)?(?P<x>[A-Z][\w'\- ]{1,40}?)\s+"
-    r"(?:is|lies|sits|is located|is situated|belongs)\s+"
+    r"(?:is located|is situated|is|lies|sits|belongs)\s+"
     r"(?:in|within|inside|part of|a state in|a province of)\s+"
     r"(?:the\s+)?(?P<y>[A-Z][\w'\- ]{1,40})", re.I)
 _CAPITAL = re.compile(
     r"^(?:the\s+)?(?P<x>[A-Z][\w'\- ]{1,40}?)\s+is the capital of\s+"
     r"(?:the\s+)?(?P<y>[A-Z][\w'\- ]{1,40})", re.I)
 
-# relations that mean "X is geographically inside Y"
 _CONTAINMENT_PROPS = ("P17", "P131", "P30", "P361")
-
-
-def _wd_qid(name: str) -> tuple[str | None, str | None]:
-    url = (f"{WD_API}?action=wbsearchentities&format=json&language=en&limit=1"
-           f"&search={urllib.parse.quote(name.strip())}")
-    req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        d = json.loads(r.read().decode())
-    s = d.get("search") or []
-    return (s[0]["id"], s[0].get("label")) if s else (None, None)
-
 
 LAST_WD_ERROR = ""
 
 
-def _wd_labels(qid: str, props: tuple[str, ...]) -> set[str]:
+def _wd_get(url: str, timeout: int = 25):
+    req = urllib.request.Request(url, headers=_WD_UA)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _wd_qid(name: str):
+    url = (f"{WD_API}?action=wbsearchentities&format=json&language=en&limit=1"
+           f"&search={urllib.parse.quote(name.strip())}")
+    d = _wd_get(url, 20)
+    s = d.get("search") or []
+    return (s[0]["id"], s[0].get("label")) if s else (None, None)
+
+
+def _wd_labels(qid: str, props: tuple) -> set:
     """Labels of the entities QID points at through PROPS.
 
-    The first version selected ?label while binding ?v0..?vN, so the variable was
-    never bound: Wikidata returned HTTP 400 and a bare `except: return None` in
-    wikidata_claim hid it, silently disabling the whole KG channel. Use VALUES +
-    rdfs:label, and record the error instead of swallowing it.
+    A first version selected ?label while binding ?v0..?vN, so the variable was
+    never bound: Wikidata returned HTTP 400 and a bare `except: return None`
+    hid it, silently disabling the whole KG channel.
     """
     global LAST_WD_ERROR
     values = " ".join(f"wdt:{pp}" for pp in props)
@@ -171,33 +261,24 @@ def _wd_labels(qid: str, props: tuple[str, ...]) -> set[str]:
          f"wd:{qid} ?p ?item . ?item rdfs:label ?label . "
          'FILTER(lang(?label) = "en") } LIMIT 30')
     url = f"{WD_SPARQL}?format=json&query={urllib.parse.quote(q)}"
-    req = urllib.request.Request(url, headers=_UA)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            d = json.loads(r.read().decode())
+        d = _wd_get(url, 30)
     except Exception as exc:
         LAST_WD_ERROR = f"{type(exc).__name__}: {str(exc)[:120]}"
         return set()
-    out = set()
-    for b in d["results"]["bindings"]:
-        lab = b.get("label", {}).get("value")
-        if lab:
-            out.add(lab.lower())
-    return out
+    return {b["label"]["value"].lower()
+            for b in d["results"]["bindings"] if b.get("label", {}).get("value")}
 
 
-def wikidata_claim(claim: str) -> tuple[str, str] | None:
-    """Deterministic verdict for entity-containment / capital claims.
-
-    Returns (verdict, detail) or None if the claim is not of a supported shape.
-    """
+def wikidata_claim(claim: str):
+    """Deterministic verdict for entity-containment / capital claims."""
     m = _CAPITAL.search(claim.strip())
     if m:
         x, y = m.group("x"), m.group("y")
         try:
             xq, _ = _wd_qid(x)
             yq, _ = _wd_qid(y)
-            if not xq or not yq:
+            if not (xq and yq):
                 return None
             caps = _wd_labels(yq, ("P36",))
             if not caps:
@@ -205,7 +286,7 @@ def wikidata_claim(claim: str) -> tuple[str, str] | None:
             ok = any(x.lower() in c or c in x.lower() for c in caps)
             return ("SUPPORTED" if ok else "CONTRADICTED",
                     f"wikidata: capitals of {y} = {sorted(caps)[:4]}")
-        except Exception as exc:
+        except Exception:
             return None
 
     m = _IN_LOC.search(claim.strip())
@@ -230,6 +311,32 @@ def wikidata_claim(claim: str) -> tuple[str, str] | None:
 
 
 def search(query: str, k: int = 5, timeout: int = 15) -> list[dict]:
+    """Retrieval via the provider ladder, not a single fragile backend.
+
+    The original version called SearXNG directly. When every SearXNG engine got
+    suspended (brave/google "too many requests", DuckDuckGo CAPTCHA, youtube 403)
+    this returned [] for every query, the verifier abstained on 10/10 items, and
+    the abstention looked honest. `retrieval.search` walks wikipedia -> wikidata
+    -> searxng so one blocked provider degrades quality instead of deleting the
+    capability.
+    """
+    try:
+        from retrieval import search as ladder_search
+    except Exception:
+        ladder_search = None
+
+    if ladder_search is not None:
+        try:
+            got = ladder_search(query, k=k)
+            if got:
+                return [{"title": (s.get("title") or "")[:160],
+                         "url": s.get("url") or "",
+                         "content": (s.get("content") or "")[:600]}
+                        for s in got]
+        except Exception:
+            pass
+
+    # last resort: the original single-provider path
     url = f"{SEARX}?q={urllib.parse.quote(query)}&format=json"
     req = urllib.request.Request(url, headers={"User-Agent": "forge-factcheck/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -318,6 +425,11 @@ def parse_verdict(raw: str) -> str:
 
 def verify_text(text: str, endpoint: str, model: str, max_claims: int) -> dict:
     claims = extract_claims(text, max_claims)
+    # atomic decomposition: a conjunction cannot be judged against one entity's evidence
+    atomic: list[str] = []
+    for cl in claims:
+        atomic.extend(split_conjunction(cl))
+    claims = atomic[:max(max_claims, len(atomic))] if atomic else claims
     results = []
     for c in claims:
         # deterministic first: Wikidata answers entity claims exactly
