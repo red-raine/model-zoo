@@ -736,3 +736,95 @@ looked like excellent convergence and it was measuring almost nothing.
 ## Do not repeat
 - Do not conclude "the model is too small" from a run that sits at exactly chance.
 - Do not report a loss without checking it against a hand-computed per-row loss.
+
+---
+
+# Part 10 — the method was wrong, not the model (operator: "why can't you beat a pair of dice")
+
+> Operator: *"figure out why you can beat a pair of dice youre clearly doing something wrong"*
+
+Correct on both counts. Two independent errors, one a bug and one a wrong task shape.
+
+## Error 1 — the harness bug (this is why 0.245 looked like chance)
+
+AVeriTeC dev label prevalence:
+
+```
+Supported 24.4% · Refuted 61.0% · Conflicting 7.6% · Not Enough Evidence 7.0%
+```
+
+**My reported accuracy was 0.245.** That is the `Supported` prevalence to three decimal
+places. Generations were degenerate (`'REFUTED.SUPPORTED.SUPPORTED'`) and my label parser
+matched **any** label string found in that text, longest-first — so it reported a label
+with no relation to the model's intent. **I never measured the model at all.**
+
+Fix, and the rule: every generation must parse to exactly one of 4 labels or the run
+**fails loudly**. No silent default. Log a confusion matrix and per-class F1 from run #1.
+At 61% majority, accuracy alone cannot distinguish "learned something" from "collapsed".
+
+## Error 2 — verdict prediction is classification, not generation
+
+The field does not generate label strings below 7B. Measured, on the same gold evidence:
+
+| system | AVeriTeC dev |
+|---|---|
+| AVeriTeC official baseline — BERT + Linear(4) + if-chain rules | **0.49** |
+| AVeriTeC full pipeline (retrieved evidence) | 0.15 @ lambda=.25 |
+| BLOOM-7B *generating* labels | macro-F1 **.43** (vs BERT-large .49) |
+| **DeBERTa-v3-large + Linear(4), multi-evidence, argmax** | **0.63** |
+| DeBERTa-v3-large, averaged over 10 shuffled QA orders | **0.65** |
+| human annotator agreement ceiling | **0.714** |
+
+Generation adds three failure modes classification cannot have: *surface-form competition*
+(probability mass smeared over `Refuted`/`REFUTED`/`false`/`incorrect`), a generic-string
+attractor, and decoding failure where no prediction exists at all.
+
+**A 435M encoder with a 4-way head beats the entire official pipeline by 14 points.**
+
+## The ceiling nobody tells you
+
+AVeriTeC inter-annotator agreement is free-marginal kappa 0.619 → for 4 classes
+`P_o = 0.619*0.75 + 0.25 = 0.714`. **Two trained annotators given the same evidence agree
+only 71.4% of the time.** So 0.63 is within 8 points of human, and anything above ~0.66 at
+sub-1B on dev would be publishable. Do not budget for more.
+
+## What I built
+
+`tools/verify/train_verifier_cls.py` — sequence classification, self-test 5/5:
+- `microsoft/deberta-v3-base` + `Linear(4)`, argmax, no generation
+- input is multi-evidence `[CLS] claim [SEP] q1 a1 [SEP] q2 a2 …` — **not** per-pair
+  classification with if-chain rules (that is the 0.49 baseline, and it turns any single
+  bad pair into a wrong verdict)
+- **class-weighted CE** — measured weights `[0.71, 0.51, 3.85, 2.78]`, so NEI is upweighted
+  3.85x and Conflicting 2.78x
+- label order asserted against AVeriTeC `eval.py`
+- reports macro-F1 and per-class F1, with the baselines printed next to the result
+
+## Launch state — HUNG, not finished
+
+The training container ran 17 minutes with 2 log lines and produced nothing. Most likely
+stuck on the DeBERTa download through the container's HF cache mount. **No result yet.**
+
+Next: pre-pull `microsoft/deberta-v3-base` into `/home/zcoder/hf-cache` explicitly, confirm
+it is present, then re-run. Do not treat the hang as a model result.
+
+## Also worth adopting from the research
+
+1. **Average logits over 10 shuffled QA orders** — free +2 points (0.63 -> 0.65 published).
+2. **`ctu-aic/deberta-v3-large-AVeriTeC-nli`** is a released checkpoint that already scores
+   0.63. Use it as a reference arm; if our trained model cannot match it, that is the answer.
+3. **`reverify`'s zero-weight rule set** (trivial / duplicate / echoed / known /
+   self-referential → weight 0) is directly portable as a QA-pair information gate, and it
+   neutralises a real AVeriTeC pathology: the shared task found that *submitting duplicate
+   questions raises the score*, because the metric rewards duplicate evidence.
+4. **Report the AVeriTeC score, not accuracy.** Verdict accuracy on gold evidence is a
+   different number from the leaderboard.
+5. **Do not do pair-level NLI + if-chains.** AIC CTU tried training 3-way DeBERTa for exactly
+   that and reported "without a breakthrough result, motivating a radically different
+   approach", then recommended omitting the step entirely.
+
+## The rule from this one
+
+**Check the label distribution before interpreting an accuracy.** 0.245 was not a bad model;
+it was the prevalence of one class, which means the predictor was constant. A five-second
+`collections.Counter(gold)` would have caught it before I wrote "the bet failed".
