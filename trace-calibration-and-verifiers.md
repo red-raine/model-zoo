@@ -1043,3 +1043,105 @@ Training relaunched in fp32: 3,072 steps, ~1.6 it/s, ~25 min remaining at handof
 
 **Check the label distribution and the confusion matrix before interpreting any accuracy.**
 0.244 is now a recognised fingerprint of a collapsed predictor.
+
+---
+
+# Part 13 — THE CLASSIFIER WORKS: 0.78 acc / 0.613 macro-F1
+
+## Result (AVeriTeC dev, deberta-v3-base + Linear(4), fp32, 8 epochs)
+
+```
+eval_loss       2.594
+eval_acc        0.780      majority 0.610 · published DeBERTa-v3-large 0.63 · human ceiling 0.714
+eval_macro_f1   0.613      published macro-F1 0.39
+per-class F1    Supported .737 · Refuted .865 · NEI .571 · Conflicting .277
+```
+
+**+17 points over the majority baseline, +15 over the published sub-1B reference, and above
+the human annotator agreement ceiling (0.714).**
+
+Three code bugs had to be fixed to get here — a broken chat template, fp16 NaN collapse, and
+a dtype mismatch. None of them were model-capacity problems. The "350M is too small"
+conclusion was wrong twice over.
+
+### What plausibly produced the gain over the published 0.63
+1. **Multi-evidence concatenation** in one example rather than per-pair classification plus
+   if-chain aggregation (the if-chain is the 0.49 baseline; its Conflicting precision is 10%
+   by the authors' own admission).
+2. **Class-weighted CE.** Measured weights `[0.71, 0.51, 3.85, 2.78]` — NEI upweighted 3.85x,
+   Conflicting 2.78x. This is most of the macro-F1 jump (0.39 -> 0.613) and lifts the two
+   classes a 2-point-margin model would otherwise ignore.
+3. fp32 instead of fp16.
+
+### The caveat I do not yet have the answer to
+**0.78 exceeds human agreement (0.714).** That is either a real result or a shortcut. Two
+candidate shortcuts, one of which is being tested as this was written:
+
+- **Isolation test (RUNNING):** `CLAIM_ONLY=1` drops the evidence and trains on the claim
+  alone. If accuracy stays near 0.78, the model is memorising claims, not verifying them.
+- **Annotator-phrasing leak:** the QA answers were written by annotators who had read the
+  fact-check article, so wording like "published on [a fake news site]" telegraphs REFUTED.
+  A model can learn that without verifying anything. Mitigation: strip/paraphrase the
+  answers, or evaluate on freshly retrieved evidence rather than gold QA pairs.
+
+**Do not publish the 0.78 until the claim-only ablation lands and the annotator-phrasing
+leak is tested.** A number above the human ceiling demands the strongest possible scepticism.
+
+## The three references
+
+### arXiv:2604.09166 — NOT relevant (false friend)
+"Automated **Batch Distillation** Process Simulation for a Large Hybrid Dataset for Deep
+Anomaly Detection" — *Comput. Chem. Eng.* 215 (2026) 109827. "Batch distillation" is a
+**chemical** unit operation, not model distillation. The paper generates time-series data
+from a process simulator for chemical anomaly detection. Nothing transferable.
+
+### ACL 2026 long 908 — HIGHLY relevant, and it names our exact risk
+**"Distillation Traps and Guards: A Calibration Knob for LLM Distillability"** (Zhan et al.,
+ACL 2026, pp. 19814–19833).
+
+It identifies three **distillation traps**: **tail noise**, **off-policy instability**, and the
+**teacher–student gap**. They manifest as *overconfident hallucinations, self-correction
+collapse, and local decoding degradation*, which is why distillation "fails unpredictably".
+
+**This maps onto us precisely:**
+
+| their trap | our situation |
+|---|---|
+| **tail noise** | Conflicting F1 = **0.277**, NEI = 0.571, against Refuted 0.865. **That is the tail**, and it is exactly what a teacher will pollute. |
+| **off-policy instability** | our plan was reverse-CoT (rationales conditioned on the gold answer) — textbook off-policy. |
+| **teacher–student gap** | we planned to put a 4-way evidence task into 0.6B. The paper's whole point is that this gap is the failure mode, not a tuning detail. |
+
+Their proposed guard — post-hoc calibration via RFT combining task utility + KL anchor +
+tokenizer calibration — is for LLM teachers at scale, but the **diagnostic framing is
+immediately usable**: before distilling, measure whether the *teacher* is distillable by
+checking tail-class agreement, not just overall accuracy.
+
+**Action:** before any distillation, report per-class agreement between teacher and student on
+the two tail classes. If Conflicting agreement is near zero, the distillation will produce a
+confident 3-class model that guesses on the fourth.
+
+### model2vec — YES, usable, and cheap enough to be obviously worth it
+`MinishLab/model2vec` (MIT, 2.3k stars). Distils any sentence transformer into **static
+embeddings**: up to **50x smaller and 500x faster**, small quality drop, and distillation
+takes **~30 seconds on CPU with no dataset** — it just forward-passes the vocabulary.
+
+Directly useful in three places:
+
+1. **`StaticModelForClassification`** — fine-tune a static-embedding 4-way classifier on our
+   claim+evidence text and run it **without torch**. If it approaches DeBERTa's accuracy it
+   becomes the fast tier of the cascade (and a strong candidate for the ONNX/llama.cpp
+   deployment lane in `GOLDEN-MASTER-PLAN.md` tier 2).
+2. **`potion-retrieval-32M`** as a **retrieval pre-filter** — 500x faster candidate selection
+   before the expensive judge. Given the literature says retrieval is the +14–22 point lever,
+   a cheap high-recall pre-filter is directly on the critical path.
+3. **Dedup at scale** — static embeddings over the 41k-document corpus for semantic near-dup
+   detection, cheaper than the current MinHash LSH pass (789 s for 19.5k rows).
+
+License is MIT, dependencies are numpy only. No reason not to try it.
+
+## Next, in order
+
+1. **Read the claim-only ablation.** If it is near 0.78, the result is memorisation.
+2. **Test the annotator-phrasing leak** — shuffle or paraphrase the QA answers and re-measure.
+3. **Then** model2vec: train a static classifier as the fast tier and compare to DeBERTa.
+4. **Then** distillation, with tail-class agreement measured first, per ACL 2026 long 908.
