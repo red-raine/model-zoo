@@ -276,3 +276,78 @@ Expected: $0.60      down from $1.50 — the free lanes now carry 20x more per c
 Paid:     L5 audit only (5%, 1,122 calls, deepseek-v4-flash $0.06 / gpt-5.6-terra $0.92)
 Free:     ~900 calls total for the whole corpus, ~40 min wall clock
 ```
+
+---
+
+## 10. ANSWERED — we now have the non-extractive set, and it deletes the generation job
+
+**Question was:** "is there a non-extractive verification set already on disk?"
+
+**Answer was no.** `h3_pairs_clean_v1.json` is a skill-router set (prompt -> which skill,
+all `label=1`, no evidence). Nothing else on disk had an (evidence, claim, label) shape.
+
+**But it is now downloaded, free, from GitHub** (the HF repo is gated 401; the GitHub raw
+data is not):
+
+```
+https://raw.githubusercontent.com/MichSchli/AVeriTeC/main/data/dev.json     1.7 MB   500 claims
+https://raw.githubusercontent.com/MichSchli/AVeriTeC/main/data/train.json   9.7 MB  3,068 claims
+-> B:\datasets\forge\downloads\averitec\
+```
+
+### Measured: it is genuinely non-extractive
+
+| dataset | claims | claim IS a substring of its own evidence |
+|---|---|---|
+| HaluEval qa | 10,000 | **95.5%** (string matching — useless) |
+| **AVeriTeC dev** | 500 | **0.0%** |
+| **AVeriTeC train** | 3,068 | **0.1%** |
+
+### Why it is the right instrument
+
+- **Real claims** taken from published fact-checking articles, with speaker/date/location.
+- **Evidence gathered from the open web**, not handed over as a single passage.
+- **`answer_type` is mixed on purpose:** Abstractive 2,225 / Extractive 4,571 / Boolean 1,297
+  / Unanswerable 386 (train). An abstractive answer cannot be matched, only inferred.
+- **Four-way labels** — Supported / Refuted / **Not Enough Evidence** / **Conflicting
+  Evidence/Cherrypicking** — which is exactly the honest label set the literature
+  recommends, and it includes the two classes a 2-way scheme has to fake.
+- **1,287 questions in dev** — the dataset ships the *questions* that were asked, which is
+  the query-generation target the retrieval layer needs.
+
+### What this eliminates
+
+| job | before | after |
+|---|---|---|
+| generate 20,000 non-extractive pairs | 20,000 calls, ~1 day | **not needed** |
+| invent a label scheme | design work | **AVeriTeC's 4-way is the standard** |
+| guess at query generation | design work | **1,287 real questions in dev** |
+
+### Revised budget
+
+```
+Ceiling:  $5.00    unchanged
+Expected: $0.06    down from $1.50 (and from $0.60 after the packing fix)
+Paid:     ONE audit of the deterministic channels on AVeriTeC dev (500 claims)
+Free:     ~50 calls to judge/rewrite, ~5 min wall clock
+```
+
+The free lanes are now almost idle. That is the correct outcome: **the deterministic
+channels (sympy, Wikidata) plus a real non-extractive dataset do the work, and the paid
+model is a spot-check on whether they are right.**
+
+### Licence flag
+
+AVeriTeC is **CC BY-NC 4.0** — non-commercial. Fine for internal research and for training
+an internal verifier; **it must not ship inside a commercial product**. Recorded here so it
+is not discovered later. This is the same trap as FrameNet 1.5 vs 1.7 and ConceptNet data
+being CC BY-SA.
+
+### Next step, now unblocked
+
+1. Build the verifier training set from **AVeriTeC train (3,068 claims)** with the 4-way
+   label scheme — not from HaluEval.
+2. Evaluate on **AVeriTeC dev (500)** — the number that will actually mean something.
+3. Run the deterministic channels first (sympy + Wikidata); AVeriTeC's Boolean and
+   Extractive answers are the ones they can settle exactly, and the Abstractive ones are
+   the residue that needs a model.
