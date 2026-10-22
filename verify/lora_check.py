@@ -298,6 +298,17 @@ def check_text(text: str, endpoint: str = JUDGE, model: str = JUDGE_MODEL,
     claims = stage_decompose(text or "", endpoint, model, max_claims)
     out["decomposed"] = len(claims)
 
+    # MEASURED FAILURE: on HaluEval "question + answer" claims the decomposer
+    # returned [] and the pipeline abstained on 10/10 items while still spending
+    # 216 s/claim retrying the model. Never let an empty decomposition end the
+    # run: fall back to the densest source sentence.
+    if not claims:
+        fb = densest_sentence(text or "")
+        if fb:
+            claims = [fb]
+            out["decompose_fallback"] = fb
+            out["decomposed"] = 1
+
     # guard: if decomposition lost most of the source's content, verify the
     # source sentence too. Decomposition must not be allowed to make a claim
     # easier to check by deleting the part that is false.
@@ -452,6 +463,12 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] coverage guard: truncated={cov_bad:.2f} "
           f"full={cov_ok:.2f} (guard fires below 0.60)")
+
+    # (e4) empty decomposition must fall back, not abstain
+    fb = densest_sentence("Reagan and Give Us Our Skeletons were both documentaries.")
+    good = bool(fb) and "documentaries" in fb
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] decompose fallback -> {str(fb)[:52]!r}")
 
     # (f) arithmetic must be caught deterministically before any model call
     mv = math_verify("Therefore 2 + 2 = 5.")

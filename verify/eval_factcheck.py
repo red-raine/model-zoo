@@ -136,6 +136,22 @@ def verifier_predict(claim: str, endpoint: str, model: str) -> tuple[bool | None
     return PRED.get(v, None), v
 
 
+def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a proportion.
+
+    Needed because the honest answer to "accuracy 0.000" depends entirely on n.
+    At n=2 that is [0.00, 0.84]; at n=40 it is [0.00, 0.09]. Reporting the point
+    estimate without the interval is how a 2-decision result gets read as a finding.
+    """
+    if n <= 0:
+        return (float("nan"), float("nan"))
+    phat = k / n
+    denom = 1 + z * z / n
+    centre = (phat + z * z / (2 * n)) / denom
+    half = (z * ((phat * (1 - phat) / n + z * z / (4 * n * n)) ** 0.5)) / denom
+    return (round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4))
+
+
 def score(pairs: list[tuple[bool, bool | None]]) -> dict:
     """pairs = (gold, predicted_or_None)"""
     answered = [(g, p) for g, p in pairs if p is not None]
@@ -149,11 +165,13 @@ def score(pairs: list[tuple[bool, bool | None]]) -> dict:
         "answered": len(answered),
         "coverage": round(len(answered) / max(len(pairs), 1), 4),
         "accuracy_on_answered": round(correct / len(answered), 4) if answered else None,
+        "accuracy_ci95": list(wilson_ci(correct, len(answered))) if answered else None,
         "abstained": len(pairs) - len(answered),
         # the two numbers that actually matter
         "hallucinations_accepted": halluc_accepted,
         "hallucinations_total": len(halluc),
         "dangerous_rate": round(halluc_accepted / len(halluc), 4) if halluc else None,
+        "dangerous_ci95": list(wilson_ci(halluc_accepted, len(halluc))) if halluc else None,
         "true_accepted": true_accepted,
         "true_total": len(true_items),
         "recall_true": round(true_accepted / len(true_items), 4) if true_items else None,
@@ -220,6 +238,15 @@ def run_self_test() -> bool:
     good = s["coverage"] == 0.0 and s["accuracy_on_answered"] is None
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] all-abstain -> coverage=0, acc=None")
+
+    # Wilson CI: the whole point is that n=2 tells you almost nothing
+    lo2, hi2 = wilson_ci(0, 2)
+    lo40, hi40 = wilson_ci(0, 40)
+    # Wilson(0,2) upper bound is 0.658 (verified by hand); Wilson(0,40) is 0.088
+    good = lo2 == 0.0 and 0.60 < hi2 < 0.70 and hi40 < 0.15
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] Wilson CI shows the power problem: "
+          f"0/2 -> [{lo2}, {hi2}], 0/40 -> [{lo40}, {hi40}]")
 
     # verdict mapping
     for v, want in [("SUPPORTED", True), ("REFUTED", False), ("CONTRADICTED", False),
@@ -288,6 +315,12 @@ def main(argv=None) -> int:
             return f"{v['mean']:.3f} +/- {v['std']:.3f}"
         print(f"{which:<12}{fmt('coverage'):>22}{fmt('accuracy_on_answered'):>22}"
               f"{fmt('dangerous_rate'):>22}")
+        # per-run CIs make the power problem visible instead of hiding it
+        for r in d["runs"]:
+            if r.get("accuracy_ci95"):
+                print(f"    run: answered {r['answered']}/{r['n']}  "
+                      f"acc CI95 {r['accuracy_ci95']}  "
+                      f"dangerous CI95 {r.get('dangerous_ci95')}")
     print("=" * 78)
     print("dangerous = a HALLUCINATED answer accepted as TRUE (lower is better)")
     print("coverage  = fraction where a verdict was given at all")

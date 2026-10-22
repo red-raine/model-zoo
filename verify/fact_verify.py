@@ -166,6 +166,12 @@ def split_conjunction(claim: str) -> list[str]:
     ents = entities(claim)
     if len(ents) < 2:
         return [claim]
+    # Two entities is NOT enough: "Paris is the capital of Germany" has two
+    # entities and no conjunction, and splitting it produced "Paris is a capital"
+    # and "Germany is a capital" -- both meaningless. Require an explicit
+    # conjunction joining the entities.
+    if not re.search(r"\b(?:and|both|or)\b", claim, re.I):
+        return [claim]
     preds = predicate_terms(claim)
     if not preds:
         return [claim]
@@ -423,7 +429,23 @@ def parse_verdict(raw: str) -> str:
     return "UNKNOWN"
 
 
-def verify_text(text: str, endpoint: str, model: str, max_claims: int) -> dict:
+def judge_pair(claim: str, snip: dict, endpoint: str, model: str,
+               timeout: int = 300, max_tokens: int = 512) -> str:
+    """Judge ONE snippet against the claim. Returns SUPPORTED/CONTRADICTED/UNKNOWN."""
+    ev = f"{snip.get('title', '')}: {snip.get('content', '')}"
+    try:
+        raw, finish, _ = _judge_call(claim, ev[:1800], endpoint, model,
+                                     max_tokens, timeout)
+        if not raw and finish == "length":
+            raw, _, _ = _judge_call(claim, ev[:1800], endpoint, model,
+                                    max_tokens * 2, timeout)
+    except Exception:
+        return "UNKNOWN"
+    return parse_verdict(raw)
+
+
+def verify_text(text: str, endpoint: str, model: str, max_claims: int,
+                min_support: int = 2, pairwise: bool = True) -> dict:
     claims = extract_claims(text, max_claims)
     # atomic decomposition: a conjunction cannot be judged against one entity's evidence
     atomic: list[str] = []
@@ -466,6 +488,29 @@ def verify_text(text: str, endpoint: str, model: str, max_claims: int) -> dict:
             results.append({"claim": c, "verdict": "UNKNOWN",
                             "why": "no_sources", "sources": 0, "query": used_q})
             continue
+        if pairwise:
+            # One call per snippet. A single confident snippet must not be able to
+            # carry a TRUE verdict: the measured failure was dangerous=1.000,
+            # i.e. hallucinated answers accepted as TRUE off one supporting hit.
+            per = [judge_pair(c, s, endpoint, model) for s in snips[:4]]
+            s_n = sum(1 for v in per if v == "SUPPORTED")
+            r_n = sum(1 for v in per if v == "CONTRADICTED")
+            if r_n and s_n:
+                v, why = "UNKNOWN", f"conflicting {s_n}S/{r_n}C"
+            elif r_n:
+                v, why = "CONTRADICTED", f"{r_n} refuting snippet(s)"
+            elif s_n >= min_support:
+                v, why = "SUPPORTED", f"{s_n} independent supporting snippets"
+            elif s_n == 1:
+                v, why = "UNKNOWN", "only 1 supporting source (below min_support=2)"
+            else:
+                v, why = "UNKNOWN", "no supporting or refuting snippet"
+            results.append({"claim": c, "verdict": v, "why": why,
+                            "sources": len(snips), "query": used_q,
+                            "per_snippet": per,
+                            "top": snips[0]["title"] if snips else None})
+            continue
+
         v, why = judge(c, snips, endpoint, model)
         results.append({"claim": c, "verdict": v, "why": why,
                         "sources": len(snips), "query": used_q,

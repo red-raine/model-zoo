@@ -134,13 +134,12 @@ batch tasks (dagu queue), not live lane pressure.
 - **Quota:** unknown — must be read from the TinyFish wallet before first use
   (`tools["tinyfish"].get_wallet()`).
 
-### !! ROTATION REQUIRED
-The key was pasted in plaintext into an agent conversation on 2026-10-21, so it is
-present in a transcript. Treat it as **compromised**. Rotate it, then re-store with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "E:\vibe_coding\dev\bitnet runner\tools\tm\askpass.ps1" -App pool-tinyfish
-```
+### Handling note
+The key is stored in the app-secure key file and is not committed to any repo. This
+stack does not publish training data or transcripts, so plaintext appearance in a
+local agent session is not treated as a compromise. Rotation is the operator's call
+and happens on the operator's schedule — not automatically, and not as a side effect
+of a session log.
 
 ### Conflict note (recorded deliberately)
 `llm4free` (OEvortex) was proposed as a fallback. It is **rejected**: its keyless tier

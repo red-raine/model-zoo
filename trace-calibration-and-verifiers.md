@@ -178,3 +178,100 @@ version it replaced on the one case that mattered.
 
 > Question the metric. Then question the fix. Then test the fix against the thing you
 > replaced.
+
+---
+
+# Part 3 — retrieval was the blocker, and calibration made abstention the default
+
+## The backend was dead, not my queries
+
+SearXNG returned **0 results for every query**, including `"capital of france"`. Every
+engine behind it was suspended:
+
+```
+brave        Suspended: too many requests
+duckduckgo   CAPTCHA
+google cse   "unusual traffic from your network"
+youtube-cc   403
+media-search crash
+```
+
+A single-provider retrieval layer converts the whole verification stack into a silent
+no-op that reports *"No evidence found"* — which reads as an honest abstention. Worst
+failure mode available: plausible and total.
+
+**`tools/verify/retrieval.py`** — provider ladder `wikipedia -> wikidata -> searxng` with
+per-process throttle, 429 backoff honouring `Retry-After`, and a disk cache at
+`B:\datasets\forge\cache\retrieval`. Self-test includes *"a dead provider is skipped and
+the next one still answers"*.
+
+Wikipedia is the workhorse: free, unblocked, no key, and it answered the exact claim
+SearXNG could not (`"Give Us Our Skeletons documentary"` → *"is a 1999 documentary film"*).
+
+## Two more fatal bugs, both found by testing the fix
+
+**Query was the verbatim claim.** For a claim about documentaries, Wikipedia returned
+*Michael Jackson*, *RoboCop* and *Internment of Japanese Americans*. Replaced with
+entity+predicate queries:
+
+```
+entities: ['Reagan', 'Give Us Our Skeletons']
+queries : ['Reagan documentaries', 'Give Us Our Skeletons documentaries', ...]
+```
+
+**Conjunctions judged against one entity's evidence.** *"Reagan and Give Us Our Skeletons
+were both documentaries"* was CONTRADICTED — evidence for `"Reagan documentaries"` is about
+the **2024 biopic**, not the 2011 documentary. Added atomic decomposition:
+
+```
+Reagan is a documentary                 -> SUPPORTED (5 sources)
+Give Us Our Skeletons is a documentary  -> SUPPORTED (5 sources)
+```
+
+Then the splitter over-fired: *"Paris is the capital of Germany"* has two entities but no
+conjunction, and became *"Paris is a capital"* + *"Germany is a capital"*. Now requires an
+explicit `and|both|or`.
+
+## Calibration: SUPPORTED must be corroborated
+
+The measured `dangerous = 1.000` (hallucinated answers accepted as TRUE) came from mapping
+a single `SUPPORTED` judgement straight to `TRUE`. Fixed:
+
+- judging is now **pairwise** (one call per snippet, capped at 4)
+- `SUPPORTED` requires **>= 2 independent supporting snippets**; exactly one → `UNKNOWN`
+  with the reason recorded (`"only 1 supporting source (below min_support=2)"`)
+- any support *and* any refutation → `UNKNOWN` (`"conflicting 1S/1C"`), never a coin flip
+
+Effect on the same claims:
+
+| claim | before | after |
+|---|---|---|
+| Reagan is a documentary | CONTRADICTED | **UNKNOWN** (conflicting 1S/1C) |
+| Give Us Our Skeletons is a documentary | — | **SUPPORTED** (2 sources) |
+| Paris is the capital of Germany | CONTRADICTED (mangled) | **CONTRADICTED** (intact claim) |
+
+Abstention is now the default under uncertainty, which is the correct behaviour for a
+gate and the opposite of what it did before.
+
+## Power: Wilson intervals, so n=2 cannot masquerade as a result
+
+`wilson_ci()` added to `eval_factcheck.py` and printed per run:
+
+```
+0/2   -> [0.000, 0.658]      n=2 tells you almost nothing
+0/40  -> [0.000, 0.088]      n=40 is a result
+5/10  -> [0.237, 0.763]      textbook check
+10/10 -> [0.723, 1.000]      never "100%"
+```
+
+The earlier "accuracy 0.000, dangerous 1.000" was **2 decisions**. The interval is
+[0, 0.66]. Reporting the point estimate was wrong; the harness now refuses to let me.
+
+## Bugs I caused while fixing things
+
+- Deleted the **entire Wikidata block** replacing `_query_for` (it sat between
+  `_query_for` and `search`). Restored, and that region now carries a warning comment.
+- Broke my own CI self-test by expecting Wilson(0,2) > 0.70 when the correct value is
+  0.658. The maths was right; the expectation was wrong.
+
+Both are the same lesson: after editing a region, run the self-test for that region.
