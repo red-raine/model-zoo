@@ -36,5 +36,29 @@
     "evidence": "same upstream corpus as AiresPucrs/stanford-encyclopedia-philosophy, which sources.py marks license=other with note 'humanities CPT; license vague - clear before commercial'",
     "verified": false,
     "note": "SEP content is (c) Stanford Metaphysics Research Lab; treat as non-commercial until cleared"
+  },
+  "greghavens/gpt56sol": {
+    "license": "unknown",
+    "evidence": "agent rollouts produced by gpt-5.6-sol (teacher_model field, reasoning_effort=xhigh) under B:\\datasets\\distilling\\raw\\greghavens_gpt56sol_partial",
+    "verified": false,
+    "note": "SYNTHETIC/THIRD-PARTY OUTPUT: gpt-5.6-sol generations, not a licensed dataset. Output-ToS-sensitive; internal-only. Every row is verifier-tagged, which is why it is usable for research."
+  },
+  "greghavens/fable5": {
+    "license": "unknown",
+    "evidence": "agent rollouts under B:\\datasets\\distilling\\raw\\greghavens_fable-5-coding-and-debugging-traces (observed_models / teacher_runtime fields)",
+    "verified": false,
+    "note": "SYNTHETIC/THIRD-PARTY OUTPUT: agent rollouts, no dataset licence card. Internal-only until provenance is confirmed."
+  },
+  "amanrangapur/Fin-Fact": {
+    "license": "apache-2.0",
+    "evidence": "HF cardData license=apache-2.0 (verified via tools/data/scout_datasets.py 2026-10-21)",
+    "verified": true,
+    "note": "3,369 rows, 3-way labels (false 1273/true 1485/neutral 611), 3.4% extractive = usable verification set"
+  },
+  "vllm-sr/fact-check-classification-dataset": {
+    "license": "apache-2.0",
+    "evidence": "HF cardData license=apache-2.0 (verified via scout 2026-10-21)",
+    "verified": true,
+    "note": "22,321 rows of (question, FACT_CHECK_NEEDED?) = CHECK-WORTHINESS task, not verification"
   }
 }

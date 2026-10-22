@@ -179,12 +179,29 @@ def row_texts(rec: dict) -> dict[str, str]:
                 parts.append(m["content"])
         if parts:
             out["messages"] = "\n".join(parts)
-    for k in ("prompt", "instruction", "question", "input"):
+    for k in ("prompt", "instruction", "question", "input", "claim", "statement",
+              "hypothesis", "premise"):
         if isinstance(rec.get(k), str):
             out[k] = rec[k]
     for k in ("completion", "response", "output", "answer"):
         if isinstance(rec.get(k), str):
             out[k] = rec[k]
+    # evidence can be a list of snippets (Fin-Fact, AVeriTeC) -- flatten it
+    for k in ("evidence", "context", "passage", "knowledge", "sources"):
+        v = rec.get(k)
+        if isinstance(v, str):
+            out[k] = v
+        elif isinstance(v, (list, tuple)):
+            parts = []
+            for x in v:
+                if isinstance(x, str):
+                    parts.append(x)
+                elif isinstance(x, dict):
+                    parts.extend(str(x.get(f) or "") for f in
+                                 ("answer", "text", "content", "snippet", "evidence"))
+            joined = "\n".join(p for p in parts if p.strip())
+            if joined:
+                out[k] = joined
     if isinstance(rec.get("code"), str):
         out["code"] = rec["code"]
     return out

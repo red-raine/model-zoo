@@ -1,0 +1,75 @@
+{
+  "gate": "forge-gate/v1",
+  "corpus": "finfact",
+  "input": "B:\\datasets\\forge\\downloads\\factcheck\\finfact.jsonl",
+  "output": "B:\\datasets\\forge\\cleaned\\finfact.jsonl",
+  "rows_in": 3369,
+  "rows_out": 3369,
+  "verdict": "CLEAN",
+  "note": "Fin-Fact: 3369 rows, 3-way labels, 3.4% extractive (NON-EXTRACTIVE verification set), Apache-2.0.",
+  "refs_hash": "a02530625c52fb0639931f0fd922ecf8dec3b1cc1495d7f0789f0c1b1d59840c",
+  "refs_count": 40303,
+  "refs_per_source": {
+    "arc_ARC-Challenge": 1172,
+    "arc_ARC-Easy": 2376,
+    "gsm8k": 8792,
+    "hellaswag": 10042,
+    "humaneval": 164,
+    "mbpp": 500,
+    "mbpp_full": 500,
+    "mbpp_sanitized": 631,
+    "mmlu": 14042,
+    "truthfulqa": 817,
+    "winogrande": 1267
+  },
+  "thresholds": {
+    "ngram_strict": 13,
+    "ngram_warn": 8,
+    "minhash_threshold": 0.7,
+    "minhash_shingle": 5
+  },
+  "decontam": {
+    "layer": "decontam_text/v1",
+    "hits_total": 0,
+    "hits_by_layer": {},
+    "hits_by_source": {},
+    "contamination_rate": 0.0,
+    "warn_band_rows": 0,
+    "examples": [],
+    "seconds": 0.8
+  },
+  "dedup": {},
+  "eval_guard": {
+    "status": "not_run"
+  },
+  "license": {
+    "gate": "license/v1",
+    "coverage": 1.0,
+    "commercial_coverage": 0.0,
+    "distribution": {
+      "unknown|unknown": 3369
+    },
+    "policy": "internal-only",
+    "sources_needing_action": {
+      "?": 3369
+    },
+    "registry": "B:\\datasets\\forge\\refs\\license-registry.json"
+  },
+  "pii": {
+    "gate": "pii/v1",
+    "mode": "redact",
+    "rows_with_hits": 0,
+    "rows_dropped": 0,
+    "hits_by_label": {},
+    "secret_hits": 0,
+    "verdict": "CLEAN"
+  },
+  "verdict_reasons": [],
+  "decontam_self_test": "5/5",
+  "license_coverage": 1.0,
+  "audit": {
+    "status": "not_run"
+  },
+  "built_at": "2026-10-22T03:59:01Z",
+  "builder": "tools/data/gate.py"
+}
