@@ -959,3 +959,87 @@ a full verification pass?" — not as a better classifier.
   Enough for the packed judge (~50 calls for the whole corpus).
 - **No paid key is needed for step 1 or 2.** The classifier trains on the Arc, and evidence
   work is deterministic. Revisit payment only if step 2 stalls.
+
+---
+
+# Part 12 — both tracks: deterministic channel widened, classifier bugs fixed, and one structural finding
+
+## Track B — the deterministic channel: built, and it does not fit AVeriTeC
+
+`tools/verify/wikidata_relations.py` — 35 relations, spaCy entity spans, auditable verdicts.
+
+Two real bugs found and fixed by the self-test:
+1. **Six property directions were backwards.** "X is the capital of Y" means *Y* has capital
+   *X*, so P36 lives on the OBJECT. Same for head-of-state (P35), CEO (P169), founded-by
+   (P112), owns (P127), author (P50), director (P57), producer (P162), cast (P161).
+2. **The P31 pattern over-matched.** `r"\bis (?:a|an|the)?\s*(?:kind of|type of)?\b"` has
+   every group optional, so it matched a bare `" is "` and won the first-match race against
+   every more specific relation — "Paris is the capital of France" extracted as P31.
+
+Both fixed; self-test now 10/10 including explicit direction assertions.
+
+### Then the structural finding
+
+**Coverage on 50 AVeriTeC dev claims: 0.0.** Only 1 triple extracted in total.
+
+Diagnosing it showed this is not a code bug — it is a **dataset/claim-style mismatch**:
+
+```
+"In a letter to Steve Jobs, Sean Connery refused to appear in an apple commercial."
+"Due to Imran Khan's criticism of Macron's comments on Islam, French authorities cancelled..."
+"UNESCO declared Nadar community as the most ancient race in the world."
+"Republican Matt Gaetz was part of a company that had to pay 75 million in hospice fraud."
+```
+
+AVeriTeC claims are **narrative events with multiple clauses**. They are not
+`subject --property--> object` facts. Wikidata stores *entity properties*, not *event
+narratives*. No number of relations will make "Sean Connery refused to appear in an apple
+commercial" a P-number.
+
+**So: the deterministic channel needs a different dataset.** FactKG (arXiv:2305.06590,
+108k claims, 5 reasoning types, **gold relation paths** as evidence) is built for exactly
+this. That is where the Wikidata channel fires, and it is already on the operator's list.
+
+Correct division of labour:
+| channel | dataset | why |
+|---|---|---|
+| sympy + Wikidata relations | **FactKG** | claims ARE `S --relation--> O` with gold paths |
+| DeBERTa classifier + retrieval | **AVeriTeC** | claims are narrative; needs evidence retrieval |
+
+That is a genuine redirect, not a failure: I had the right tool pointed at the wrong corpus.
+
+## Track A — the classifier: three code bugs, now training in fp32
+
+| bug | symptom | fix |
+|---|---|---|
+| class weights left in fp32 while the model ran fp16 | `RuntimeError: expected scalar type Half but found Float` | cast weights to `logits.dtype` |
+| DeBERTa-v3 fp16 numerical instability | **`eval_loss: NaN`**, every prediction collapsed to class 0 → accuracy 0.244 = the `Supported` prevalence | force `fp32` + `.float()`; 86M is cheap in fp32 |
+| (earlier) hand-built `<|user|>` chat template | degenerate generation | `apply_chat_template` |
+
+**Note the pattern repeating:** the NaN collapse produced *exactly* 0.244 again — the
+`Supported` prevalence. That number has now appeared three times from three different bugs,
+which is why "check the label distribution first" is the rule.
+
+Training relaunched in fp32: 3,072 steps, ~1.6 it/s, ~25 min remaining at handoff.
+
+## What is left, in order
+
+1. **Let the fp32 classifier finish** and read `eval_acc` / `eval_macro_f1` / per-class F1.
+   Bar to beat: **0.610**. Published reference: DeBERTa-v3-large **0.63**; human ceiling
+   **0.714**.
+2. **Point the deterministic channel at FactKG**, not AVeriTeC. That is where it can fire.
+3. **Retrieval for AVeriTeC** — the +14–22 point lever, per arXiv:2608.25934.
+4. Do not add more relations to fix AVeriTeC coverage. The mismatch is structural.
+
+## The rule, now confirmed five times
+
+| number | what it looked like | what it was |
+|---|---|---|
+| judge 0.886 | the judge works | dataset 95.5% extractive |
+| verifier 1.000 | training works | substring matching |
+| coverage 0.00 | calibration too strict | adapter produced no claims |
+| accuracy 0.245 | 350M is too small | hand-built chat template |
+| accuracy 0.244 (again) | — | **fp16 NaN, all predictions to one class** |
+
+**Check the label distribution and the confusion matrix before interpreting any accuracy.**
+0.244 is now a recognised fingerprint of a collapsed predictor.

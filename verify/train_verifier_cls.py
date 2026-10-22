@@ -180,7 +180,7 @@ def main(argv=None) -> int:
 
     tok = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model, num_labels=4, id2label=I2L, label2id=L2I)
+        args.model, num_labels=4, id2label=I2L, label2id=L2I).float()
 
     class DS(torch.utils.data.Dataset):
         def __init__(self, xs, ys):
@@ -217,8 +217,11 @@ def main(argv=None) -> int:
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
             labels = inputs.pop("labels")
             out = model(**inputs)
-            loss = torch.nn.functional.cross_entropy(out.logits, labels,
-                                                     weight=w.to(out.logits.device))
+            # cast the weights to the LOGITS' dtype: the model runs in fp16/bf16 while
+            # the weight vector is fp32, which raises
+            # "RuntimeError: expected scalar type Half but found Float"
+            wl = w.to(device=out.logits.device, dtype=out.logits.dtype)
+            loss = torch.nn.functional.cross_entropy(out.logits, labels, weight=wl)
             return (loss, out) if return_outputs else loss
 
     targs = TrainingArguments(
@@ -232,6 +235,11 @@ def main(argv=None) -> int:
         logging_steps=25,
         report_to=[],
         use_cpu=not torch.xpu.is_available(),
+        # DeBERTa-v3 (86M) is numerically unstable in fp16: measured eval_loss NaN and
+        # every prediction collapsing to class 0 (= the Supported prevalence, 0.244).
+        # An 86M model in fp32 is cheap, so there is no reason to risk it.
+        fp16=False,
+        bf16=False,
         seed=42,
         remove_unused_columns=True,
     )
