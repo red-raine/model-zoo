@@ -828,3 +828,134 @@ it is present, then re-run. Do not treat the hang as a model result.
 **Check the label distribution before interpreting an accuracy.** 0.245 was not a bad model;
 it was the prevalence of one class, which means the predictor was constant. A five-second
 `collections.Counter(gold)` would have caught it before I wrote "the bet failed".
+
+---
+
+# Part 11 — what the 2026 literature says about the plan (and where it disagrees)
+
+## The single most important number I found
+
+**ClaimCheck (arXiv:2510.01226): Qwen3-4B with a modular pipeline scores 76.4% on AVeriTeC**,
+beating LLaMA-3.1-70B and GPT-4o baselines.
+
+And **arXiv:2608.25934**: replacing retrieved evidence with **gold evidence buys +14 to +22
+points** across models, and *claim-only* models can beat zero-shot LLM pipelines. Their
+conclusion: **"retrieval remains the primary bottleneck."**
+
+So the 0.63 DeBERTa figure is **evidence-limited, not model-limited**. Every point of effort
+spent on the model head is worth less than effort spent on evidence quality. That reorders
+the whole plan.
+
+## The distillation idea — right instinct, wrong order
+
+Operator idea: distill DistilBERT into a reasoning decision model with a decision/JEV-like
+head, then into a 0.6B Qwen.
+
+What the evidence actually supports:
+
+| finding | source | consequence |
+|---|---|---|
+| Distilling Step-by-Step gives **+0.5 to +6.0 points** on 220M–770M T5 | arXiv:2305.02301 | real, but measured *against label-only finetuning of the same model* |
+| **A classifier is a better labeller than an LLM; an LLM is a better explainer than a classifier** | ARG, arXiv:2309.12247 (AAAI 2024) | **split the roles** — gold labels, LLM rationales |
+| Rationale **quality dominates quantity** (+4.6% from selection, fewer rationales) | MoRSD, arXiv:2509.23574 | filter hard; drop 30–50% |
+| **A retrieve-then-verify harness cannot be distilled into a small student** — representational, not a tuning problem (NL ⊄ TC⁰) | arXiv:2610.27157 | do not try to compress the pipeline into 0.6B |
+| **In-Writing order** — free justification first, then one constrained verdict token — beats natural generation by up to 27% | arXiv:2601.07525 | this is the right output shape |
+
+**Do not distill the 0.63 classifier's labels.** At 0.63 against a 0.61 majority baseline it
+carries ~2 points of signal plus its errors; distilling it teaches the student the errors.
+Use the **gold** labels and get rationales from a strong teacher.
+
+**Expected outcome: 0.60–0.66 — at or below the classifier.** The whole task spans 0.61
+(majority) to 0.714 (human agreement). A 0.6B generator cannot find 5 points that a 435M
+classifier cannot. The generator buys **auditability**, not accuracy.
+
+## The frame-logic question — honest answer
+
+Of the seven families cited (world models, concept graphs, neuro-symbolic, latent-space, RL
+agents, memory-augmented, cognitive architectures), **five have never been applied to
+natural-language claim verification.** No MuZero/DreamerV3, no Cyc, no Logic Tensor Networks,
+no SOAR/ACT-R/OpenCog/Sigma result exists on this task.
+
+The one that *has* worked is **KG-as-retrieved-evidence**: FactKG (arXiv:2305.06590),
+KG-GPT (arXiv:2310.11220), FactGenius (arXiv:2406.01311), SimGRAG (arXiv:2412.15272),
+AgentKGV (arXiv:2607.09092). Note what it does — it **retrieves** a structured subgraph and
+serialises it into the prompt. It does not inject an ontology into attention.
+
+**"OWL2 ontology injected as a vector map with a dedicated concept attention head" — no
+evidence, and one controlled comparison argues against it:** arXiv:2605.22641 (EMNLP 2026
+Findings) compared early fusion, late fusion and cross-attention fusion of retrieved
+knowledge and found **"early fusion outperforms both trainable variants."** The elaborate
+attention mechanism is the part that does not pay.
+
+**FrameNet as an intermediate representation for verification:** exactly one paper ever tried
+it (SURFACE, arXiv:1810.13223, 2018), against baselines from a era when FEVER accuracy was in
+the 50s–60s. Never replicated, never part of a competitive system. The current frame-semantics
+benchmark (FrameBench, arXiv:2609.03370) finds **"small models struggle"** with frames at all.
+
+**Verdict:** frames are a good *diagnostic vocabulary* (which is why `logos` uses them for
+syllogistic validity) but there is **no evidence** they beat plain text as a verification
+input. Do not build the attention head.
+
+## Deterministic thinking — what actually works in 2026
+
+| method | source | result |
+|---|---|---|
+| **ILP/logic verifier in the loop**, rewrite the offending step and regenerate | Reason Popper-ly, arXiv:2607.23019 | **up to +48 points for small models** on multi-hop |
+| **Neurosymbolic primitive programs** (reasoning as an explicit DSL program) | Forethought, arXiv:2607.04096 | ~+30% relative; small models match frontier |
+| **Process (step-level) reward** | arXiv:2607.02869 | Qwen2.5-0.5B GSM8K **63.73% vs 53.75%** outcome-only |
+| **RLVR alone at tiny scale** | arXiv:2606.22189 | 135M model *decreased* 1.82% → 1.59% — negative |
+| **Constrained single-label decoding** | Koa-decision, arXiv:2609.36115 | 85.5% on intent routing, 7.5× faster — good for the *verdict* token |
+| **Verifier certificates** | arXiv:2610.09541 | mostly **abstain** at realistic calibration; a certificate is not a correctness guarantee |
+
+The pattern: **the deterministic checker does the work; the model supplies grounded content
+the checker cannot compute.** That is exactly the shape our pipeline already has (sympy,
+Wikidata) — it just needs to be wider and actually fire.
+
+## Decision-model API — free, useful, with two real caveats
+
+`https://decision.vllm-sr.ai/keys` is the **vLLM Semantic Router "Decision API"**: six typed
+models that answer with **calibrated probabilities and generate zero tokens**.
+
+| model | params | Decision Index (text) | free limits |
+|---|---|---|---|
+| d3-turbo | 27B | 70.2 | 540/min · 648k/day |
+| d3-flash | 9B | 55.79 | 720/min · 432k/day |
+| d3-mini | 4B | 52.61 | 1,260/min · 756k/day |
+| d3-nano | 2B | 38.86 | 1,440/min · 864k/day |
+| d3-lite | 0.8B | 32.33 | 1,920/min · 1.15M/day |
+| **d3-edge** | **0.6B** | **20.24** | 3,840/min · 2.3M/day |
+
+**Caveat 1 — logging is on and cannot be turned off.** Their docs say logged data "may be
+stored and used to… train and evaluate models. No request header turns logging off." So
+**never send unpublished AVeriTeC dev claims or anything sensitive** through it.
+
+**Caveat 2 — the 0.6B number is the reality check.** `d3-edge` at 0.6B scores **20.24** on
+their own index versus 55.79 for 9B. A 0.6B typed decider is weak in general. And the
+independent audit (arXiv:2609.32160, 28 papers) concludes: **"the typed readout itself has not
+shown an independent accuracy advantage… Jev's clearest gains are in latency and cost."**
+
+**How to use it:** as a cheap, fast, well-calibrated **deferral gate** — "is this claim worth
+a full verification pass?" — not as a better classifier.
+
+## Revised order of work
+
+1. **Finish the classifier** (deberta-v3-base + Linear(4), already built) and get a real
+   number. Target 0.63; the bar to beat is 0.61.
+2. **Then attack evidence quality, not the model.** +14–22 points live there. That means
+   wider deterministic channels (sympy + a general entity/relation → SPARQL extractor), not a
+   better head.
+3. **Then** the explainer: gold labels + LLM rationales, filtered by span-grounding and
+   entailment, trained in In-Writing order (justification first, then one constrained verdict
+   token). Expect 0.60–0.66 and treat it as an *explainer cross-checked against the
+   classifier*, never as a replacement.
+4. **Do not** build the OWL2 attention head, do not distil the pipeline into 0.6B, do not
+   expect frames to beat plain text.
+
+## Keys
+
+- **Decision API**: free, no account, worth having for the deferral gate. Get one, but keep
+  unpublished eval claims off it.
+- **OpenRouter free tier**: we already hold the $10 top-up → 1,000 req/day, one shared bucket.
+  Enough for the packed judge (~50 calls for the whole corpus).
+- **No paid key is needed for step 1 or 2.** The classifier trains on the Arc, and evidence
+  work is deterministic. Revisit payment only if step 2 stalls.
