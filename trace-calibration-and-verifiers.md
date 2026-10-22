@@ -695,3 +695,44 @@ that is resolved.** Accuracy is the only signal that has been reliable.
 The rule that catches all four: **when a model performs at exactly chance, suspect the
 plumbing before the capacity.** And: *if two measurements of the same thing disagree
 (trainer loss 0.07 vs per-row loss 4.9), stop and find out why before reporting either.*
+
+---
+
+# Part 9 — state at handoff (2026-10-22)
+
+## Fixed and verified
+- `train_arc.py` + `eval_averitec.py` now use the model's native `apply_chat_template`
+- 100-row overfit test improved 0.270 -> 0.400 at 50 rows with the fix
+
+## OPEN — the loss anomaly is NOT resolved
+`train_arc.py` reports `train_loss ≈ 0.097` while true per-row loss measured ~4.9, in BOTH
+the broken-template and fixed-template runs. Two attempts to measure
+full-sequence vs completion-only loss locally **timed out**: CPU forward passes on ~500-token
+sequences with a 350M model take minutes each, so 15 rows x 3 passes does not fit a shell
+window.
+
+**Do this on the GPU, not on CE:**
+```python
+# for 15 rows, on sol inside the unsloth image
+pid = tok(apply_chat_template(...), return_tensors="pt").input_ids
+cid = tok(completion, add_special_tokens=False).input_ids
+ids = cat([pid, cid], 1)
+lab = ids.clone(); lab[:, :pid.shape[1]] = -100
+full = model(input_ids=ids, labels=ids).loss      # all tokens
+comp = model(input_ids=ids, labels=lab).loss      # completion only
+```
+- if `comp ≈ 0.097` and argmax accuracy is low → TRL's number is fine, the bug is elsewhere
+- if `comp ≈ 4.9` → **TRL's reported loss is bogus and must not be trusted**
+
+**Until this is answered, treat `train_loss` from `train_arc.py` as meaningless.** A wrong
+loss curve is how a dead run looks healthy — which is exactly what happened here: 0.097
+looked like excellent convergence and it was measuring almost nothing.
+
+## Re-run list (all invalidated by the template bug)
+1. 100-row overfit with the fix, enough steps to reach ~1.0 (proves the pipeline works)
+2. AVeriTeC train -> dev, 4-way, against the 0.610 majority baseline
+3. v6-sft and harvested — their TRACE numbers used the same hand-built template
+
+## Do not repeat
+- Do not conclude "the model is too small" from a run that sits at exactly chance.
+- Do not report a loss without checking it against a hand-computed per-row loss.
