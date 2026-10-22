@@ -275,3 +275,84 @@ The earlier "accuracy 0.000, dangerous 1.000" was **2 decisions**. The interval 
   0.658. The maths was right; the expectation was wrong.
 
 Both are the same lesson: after editing a region, run the self-test for that region.
+
+---
+
+# Part 4 — the judge is fine; the pipeline around it is broken
+
+## The n=20 calibrated run was invalid, and I have to say why
+
+It reported coverage 0.000 on 20 items. That looked like the calibration being too strict.
+It wasn't. **14 of the 20 items produced `no_claim`** — the extractor never got a claim:
+
+```
+"Which American worldwide automotive industry components and parts suppliers...? Lear Corporation."
+```
+
+HaluEval qa is **question + answer**, not a declarative claim. `extract_claims` requires a
+declarative sentence with a finite verb, so it correctly refused — and the harness scored
+that refusal as abstention.
+
+**So coverage 0.000 was an ADAPTER artifact, not a verifier result.** I was measuring the
+wrong thing, and the number was meaningless in both directions.
+
+## The right test: judge given the evidence
+
+HaluEval ships a `knowledge` passage per row. That isolates the actual weak link — the
+judge — with no retrieval, no decomposition, no open-web variance:
+
+```python
+def knowledge_predict(item, endpoint, model):
+    snip = {"title": "given knowledge", "content": item["knowledge"][:1800]}
+    return fact_verify.judge_pair(item["claim"], snip, endpoint, model)
+```
+
+## RESULT — the first usable measurement in this line of work
+
+n=40 (20 true / 20 hallucinated), 1 run, gpt-oss-20b, temperature 0:
+
+| metric | value | Wilson CI95 |
+|---|---|---|
+| coverage | 0.875 (35/40) | — |
+| **accuracy** | **0.886** | **[0.741, 0.955]** |
+| **dangerous** (hallucination accepted) | **0.105** | **[0.029, 0.314]** |
+
+**Given the right evidence, the judge is decent.** 88.6% accuracy on a 35-item sample, with
+a lower bound of 74%. It accepts roughly 1 in 10 hallucinated answers.
+
+## What this reframes
+
+| configuration | coverage | accuracy | dangerous |
+|---|---|---|---|
+| judge + correct evidence | **0.875** | **0.886** | **0.105** |
+| full pipeline (retrieval + decompose + judge), fixed retrieval | 0.200 | 0.000 | 1.000 |
+| full pipeline, calibrated | 0.000 | — | — |
+| baseline (no evidence) | 0.100 | 1.000 *(1 decision)* | 0.000 |
+
+**The judge is not the bottleneck.** The pipeline loses everything in **claim extraction and
+retrieval**, and then the aggregation faithfully reports the damage.
+
+That is a completely different diagnosis from "the verifier doesn't work", and it changes
+what to build next: stop tuning the judge, fix the claim adapter and the retrieval-to-claim
+mapping.
+
+## Honest limits of the new number
+
+- **n=40, one run.** CI on dangerous reaches 0.314, so "about 1 in 10" could be 1 in 3.
+- **Evidence was handed to it.** This measures the judge, not the system. A 10.5% dangerous
+  rate with *perfect* evidence means the end-to-end rate will be worse.
+- **HaluEval is hallucination detection**, not open-web claim verification. AVeriTeC/FEVER
+  remain the right instruments for the full pipeline and are still not obtained (AVeriTeC
+  gated, SciFact script-only).
+- Single judge model (gpt-oss-20b Q4). No second judge, so no inter-judge agreement number.
+
+## Next, now that the diagnosis is right
+
+- [ ] **Fix the claim adapter**: HaluEval q+a must become a declarative claim before the
+      extractor sees it (or the extractor must accept q+a). Without this the full-pipeline
+      number stays meaningless.
+- [ ] **n>=200 on the judge-only test** to tighten `dangerous` below a 0.15 upper bound.
+- [ ] **Two judges + agreement**: route disagreements to abstention. A 10.5% dangerous rate
+      with one judge should fall with an agreement gate.
+- [ ] Re-run the full pipeline only after the adapter fix, and report it against the
+      judge-only ceiling of 0.886 — the gap is the retrieval cost.

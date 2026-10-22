@@ -88,10 +88,11 @@ def load_items(path: str, n: int, seed: int = 42) -> list[dict]:
         ha = (r.get("hallucinated_answer") or "").strip()
         if not (q and ra and ha):
             continue
+        know = (r.get("knowledge") or "").strip()
         items.append({"claim": f"{q} {ra}".strip(), "gold": True,
-                      "kind": "right", "question": q})
+                      "kind": "right", "question": q, "knowledge": know})
         items.append({"claim": f"{q} {ha}".strip(), "gold": False,
-                      "kind": "hallucinated", "question": q})
+                      "kind": "hallucinated", "question": q, "knowledge": know})
     rng.shuffle(items)
     return items[:n]
 
@@ -178,6 +179,27 @@ def score(pairs: list[tuple[bool, bool | None]]) -> dict:
     }
 
 
+def knowledge_predict(item: dict, endpoint: str, model: str) -> tuple[bool | None, str]:
+    """Judge the answer against the row's OWN supporting passage.
+
+    HaluEval qa is question+answer, not a declarative claim, so the open-web
+    extractor returns no_claim on most rows (measured: 14/20). That made the
+    coverage-0.000 run an ADAPTER artifact rather than a verifier result.
+
+    HaluEval ships a `knowledge` passage per row, so the honest, cheap test of
+    the weak link -- the judge -- is: given this evidence, is this answer right?
+    No retrieval, no decomposition, no open-web variance. Just the judge.
+    """
+    claim = item.get("claim", "")
+    ev = item.get("knowledge", "")
+    if not (claim and ev):
+        return None, "no_knowledge"
+    snip = {"title": "given knowledge", "content": ev[:1800], "url": ""}
+    import fact_verify
+    v = fact_verify.judge_pair(claim, snip, endpoint, model)
+    return PRED.get(v, None), v
+
+
 def run_once(items: list[dict], which: str, endpoint: str, model: str) -> dict:
     pairs = []
     detail = []
@@ -185,6 +207,8 @@ def run_once(items: list[dict], which: str, endpoint: str, model: str) -> dict:
         if which == "baseline":
             p = baseline_predict(it["claim"], endpoint, model)
             v = "TRUE" if p else ("FALSE" if p is False else "ABSTAIN")
+        elif which == "knowledge":
+            p, v = knowledge_predict(it, endpoint, model)
         elif which == "naive":
             p, v = naive_predict(it["claim"], endpoint, model)
         else:
@@ -275,7 +299,7 @@ def main(argv=None) -> int:
     ap.add_argument("--model", default=JUDGE_MODEL)
     ap.add_argument("--out")
     ap.add_argument("--systems", nargs="+",
-                    default=["baseline", "naive", "verifier"])
+                    default=["baseline", "knowledge", "naive", "verifier"])
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
 
