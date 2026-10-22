@@ -356,3 +356,102 @@ mapping.
       with one judge should fall with an agreement gate.
 - [ ] Re-run the full pipeline only after the adapter fix, and report it against the
       judge-only ceiling of 0.886 — the gap is the retrieval cost.
+
+---
+
+# Part 5 — retrieval v2 (all providers live) and the verifier-training bet
+
+## Search stack status, measured
+
+| component | state |
+|---|---|
+| SearXNG | **partially back** — 20 results for some queries; brave/google/duckduckgo/youtube still suspended |
+| crawl4ai :11235 | **UP** — `/health` 200, `/md` returns 37,358 chars of clean markdown |
+| Wikipedia / Wikidata API | **UP**, keyless |
+| OpenAlex / Crossref / Stack Exchange / arXiv | **UP**, keyless, own index |
+| Marginalia | 429 on the public key — optional, not core |
+| trafilatura | **installed 2.3.1** (was the one missing dependency) |
+| bs4 4.12 · lxml 5.4 · spaCy 3.8 + en_core_web_sm · httpx · playwright | all present |
+
+**The SearXNG root cause is configuration, not network.** Defaults suspend an engine
+**24 h on one CAPTCHA** and **15 days on one Cloudflare hit**
+(`SearxEngineCaptcha: 86400`, `cf_SearxEngineCaptcha: 1296000`). One bad minute takes the
+whole meta-search tier down for a fortnight. Two config fixes would restore it:
+
+```yaml
+search:
+  suspended_times:
+    SearxEngineTooManyRequests: 300      # 1h -> 5min
+    SearxEngineCaptcha: 900              # 24h -> 15min
+    cf_SearxEngineCaptcha: 3600          # 15d -> 1h
+  formats: [html, json]
+engines:
+  - name: duckduckgo
+    network:
+      impersonate: "firefox"             # TLS fingerprint, not IP
+```
+Not applied: it needs a container restart, and stopping containers is the operator's call.
+
+## retrieval.py v2 — organised by durability, not convenience
+
+```
+T1 OWN-INDEX   wikipedia · wikidata · openalex · crossref · stackexchange · arxiv
+               keyless, legal, own index, effectively never blocked
+T2 METASEARCH  searxng (bonus tier; partial success counts as success)
+T3 CRAWLER     crawl4ai /md (JS pages, mild bot walls)   <- fetch, not search
+```
+
+All 7 providers verified live, 2 queries each, all returning results.
+
+**New primitive `fetch_page(url)`** — the reason snippets were never enough:
+```
+tier 1  plain GET + trafilatura   ~50 ms, deterministic, no browser
+tier 2  crawl4ai /md f=fit        JS pages, mild bot walls
+tier 3  crawl4ai /md f=raw        last resort; noisy but never empty
+```
+The tier is recorded on every evidence row. Verified: Wikipedia page → 42,273 chars via
+trafilatura. `deep_fetch` in `verify_text` replaces the top 2 snippets with real page text
+before judging, so the judge sees evidence rather than a teaser.
+
+**spaCy entities replace the regex extractor.** The regex produced
+`"Reagan and Give Us Our Skeletons"` as one blob; spaCy returns `"Reagan"` and
+`"Give Us Our Skeletons"` separately. That alone changes the query set.
+
+## Repos assessed (ADOPT / SKIP)
+
+| repo | verdict | why |
+|---|---|---|
+| **crawl4ai** | **ADOPT** (running) | `/md` with `f=fit`/`raw`; escalation tier only. v0.9 refuses per-request proxies (untrusted gate) |
+| **Scrapling** | **ADOPT** (parser + `Fetcher`) | `Fetcher(impersonate='chrome')` uses `curl_cffi` TLS/JA3 — the actual DuckDuckGo CAPTCHA fix, since DDG blocks by TLS fingerprint, not IP |
+| **trafilatura** | **ADOPT** | the missing dependency; best offline main-content extractor |
+| WebSearchFree | adopt **pattern** | its `engines[]` with `ok`/`error`/`response_time` honesty is the best API design in the set; the binary is the same DDG/Brave scraping you're already blocked on |
+| llm4free | **SKIP code** | its *LLM* tier calls reverse-engineered consumer endpoints (confirmed ToS-risky); its *search* adapters are ordinary SERP scraping — reference only |
+| google-scraper | **SKIP** | needs paid CapSolver + residential proxy by its own README; keep only its plain-HTTP `/trends`, `/patents`, `/news/resolve-link` list |
+| gemini-search-mcp | **SKIP** | automates Google's consumer AI Mode UI; its own probes show headless fails and profile priming is required |
+| FreeKnowledge_AI | **SKIP** | 15–20× slower than DDG by its own benchmark; needs VPN for DDG + a SiliconFlow key |
+| FreedomSearch | **SKIP** | abandoned; claims cache and rate limiting the code does not contain |
+
+**The honest architectural conclusion:** do not build retrieval on a bot-wall bypass. Build
+it on own-index APIs (Wikipedia/Wikidata/OpenAlex/Crossref/arXiv/StackExchange) plus
+TLS-correct plain HTTP, and treat scraping as an opt-in tier with a hard budget.
+
+## The training bet
+
+HaluEval ships 10,000 rows with a question, a `right_answer`, a `hallucinated_answer`, and
+the `knowledge` passage that settles it. That is **20,000 labelled (evidence, claim, label)
+triples** — enough to fine-tune a small model to do this one job.
+
+`build_verifier_data.py` → **18,000 train / 2,000 val**, labels balanced
+(9,039 CONTRADICTED / 8,961 SUPPORTED), prompt chars p95 = **1,305** so 99.95% fit 512
+tokens. Gated through the full cascade: 0 contamination, 1 PII redacted, 0 secrets, CLEAN.
+
+Deliberately **two-way, not three-way**: HaluEval never supplies a merely-unrelated passage,
+so a NEUTRAL class would teach the model to hedge on everything. The abstain path belongs in
+the inference threshold, not in the training labels.
+
+Training launched on sol: LFM2.5-350M, LoRA r16, 512 seq, 4,500 steps (~33 min).
+
+**The bet, stated so it can fail:** a 350M model trained on 20k labelled pairs beats
+gpt-oss-20b (accuracy 0.886, dangerous 0.105, ~25 s/claim) on this narrow task, at ~50 ms
+per claim. If it does not, that is also a result — it would mean the task needs scale, and
+the honest move is to stop trying to shrink it.
