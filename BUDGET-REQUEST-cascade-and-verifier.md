@@ -186,3 +186,93 @@ dissolving. So the stated expectation is modest:
 - **Certain:** the free tiers cover the volume. The paid spend is an audit, and if the
   audit disagrees with the free tiers more than 5% of the time, the pipeline is wrong and
   I will report that rather than tune the threshold until it agrees.
+
+---
+
+## 9. CORRECTION — the free-lane cost model is inverted, and I had it backwards
+
+**Operator correction (2026-10-21):** free plans bill **per call**, not per token. So on a
+free lane you maximise tokens per call; on a paid lane you minimise them. My L4 design
+(one row, `{"keep":"y"}`) was the *paid* shape applied to a *free* lane. That was wrong.
+
+### The binding constraint is RPM, not RPD
+
+From `PROVIDER-RATE-LIMITS.md` (authoritative, 2026-10-06):
+
+| model | RPM | TPM | RPD |
+|---|---|---|---|
+| Gemini 3.1 Flash Lite | **4** | **4M** | 150K |
+| Gemini 3.5 Flash Lite | **2** | **4M** | 150K |
+
+4 RPM x 1,440 min = **5,760 calls/day**. The 150K RPD ceiling is **unreachable** — you run
+out of minutes, not requests. So the quota was never the lever; **packing** is.
+
+### What that changes
+
+| design | calls for 22,442 rows | wall clock |
+|---|---|---|
+| one row per call | 22,442 | **94 h** at 4 RPM |
+| pack 40 | **562** | **23 min** at 2.5 s spacing |
+| pack 60 | 375 | 16 min |
+
+At 2.5 s spacing and pack=40 the lane sustains **57,600 items/hour**. A 50K call/day cap
+covers **2,000,000 items/day** — three orders of magnitude more than we need.
+
+### Operating constraints (now enforced in code)
+
+`tools/verify/packed_judge.py` has a `CallGovernor`:
+
+- **ONE request at a time.** No concurrency anywhere.
+- **2.5 s default delay** between calls (`--delay`).
+- **50,000 calls/day cap** (`--max-calls-per-day`), deliberately well under the advertised
+  150K, because the lane is shared and a burned quota is a burned day.
+- Counter persists to `B:\datasets\forge\cache\judge_calls.json`, so a restart does not
+  silently reset the day.
+
+Verified live: 3 calls in 18.1 s, sequential, counter written `{"date":"2026-10-22","calls":3}`.
+
+### Measured performance and validation
+
+| check | result |
+|---|---|
+| packing | **30 items/call** live (pack=40, 60 rows, 2 calls, 11 s) |
+| parse robustness | 6 formats pass; garbage → `{}` and the batch is re-split, never lost |
+| **can it say no?** | **10/10 good kept, 10/10 bad dropped** on a 20-row sanity set |
+| note | my own crude tagger mislabelled "lorem ipsum" as good; the judge correctly dropped it |
+
+That last row matters: a judge that never rejects is TRACE with a new coat of paint. This
+one rejects cleanly, and the sanity set is now the regression test for it.
+
+### Revised cost picture
+
+| tier | before (my error) | after (correct) |
+|---|---|---|
+| L4 free judge, 22,442 rows | 22,442 calls, ~4 days | **562 calls, 23 min, $0** |
+| L3 rewrite (~3,366 rows, pack 10) | 3,366 calls | **337 calls, ~15 min, $0** |
+| L5 paid audit (5%, 1,122 rows) | 1,122 calls | **1,122 calls, but token-minimised** |
+
+**Only L5 keeps the short-prompt design**, because that is the only lane where tokens cost
+money. Everything free gets packed.
+
+### Two patterns to test next (operator suggestion)
+
+1. **2–3 short items per call** when rows are short — the pack size should adapt to row
+   length rather than being fixed at 40. A length-aware packer could double throughput on
+   short corpora without touching the call cap.
+2. **Have the model write the splits** — ask for `{"batches":[[1,2,3],[4,5,6]]}` so the
+   model does the packing decision and we skip a round-trip.
+
+3. **fix-then-validate with two different models** (`fix_then_validate()` is implemented):
+   Gemini 3.5 Flash Lite rewrites a rejected row, **Gemini 3.6 Flash** checks the rewrite
+   preserved meaning. Same-model self-check is worthless — it agrees with itself, which is
+   exactly the HaluEval trap one level up. Cross-model disagreement is the signal worth
+   escalating to the paid audit.
+
+### Revised ask (unchanged ceiling, better expected value)
+
+```
+Ceiling:  $5.00      unchanged
+Expected: $0.60      down from $1.50 — the free lanes now carry 20x more per call
+Paid:     L5 audit only (5%, 1,122 calls, deepseek-v4-flash $0.06 / gpt-5.6-terra $0.92)
+Free:     ~900 calls total for the whole corpus, ~40 min wall clock
+```
