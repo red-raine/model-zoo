@@ -455,3 +455,68 @@ Training launched on sol: LFM2.5-350M, LoRA r16, 512 seq, 4,500 steps (~33 min).
 gpt-oss-20b (accuracy 0.886, dangerous 0.105, ~25 s/claim) on this narrow task, at ~50 ms
 per claim. If it does not, that is also a result — it would mean the task needs scale, and
 the honest move is to stop trying to shrink it.
+
+---
+
+# Part 6 — WITHDRAWN: the judge measurement was measuring string matching
+
+I reported earlier today:
+
+> judge given the correct evidence: accuracy 0.886 [0.741, 0.955], dangerous 0.105
+> "Given the right evidence, the judge is decent. It is not the bottleneck."
+
+**That conclusion is withdrawn.** I trained a 350M verifier on HaluEval (18k pairs, loss
+0.0134, 188 steps/min) and it scored **accuracy 1.000 on 200 held-out rows**. That is a red
+flag, not a result, so I checked the dataset instead of celebrating:
+
+```
+right_answer   IS a verbatim substring of knowledge : 9,553 / 10,000  (95.5%)
+hallucinated   IS a verbatim substring of knowledge :    53 / 10,000  ( 0.5%)
+```
+
+The task is **"does the answer appear in the passage?"** — string matching with a 95% base
+rate. A two-line rule proves it:
+
+| system (same 40 items) | accuracy | dangerous |
+|---|---|---|
+| **substring rule (2 lines of Python)** | **0.975** | **0.000** |
+| gpt-oss-20b judge | 0.886 | 0.105 |
+| LFM2.5-350M trained verifier | 1.000 *(extractive val)* | — |
+
+**The 20B judge is worse than a substring check on this dataset.** Everything measured
+against HaluEval qa — the 0.886, the 0.105, and the trained verifier's 1.000 — measures
+substring matching. None of it transfers to real claims, where answers are not extractive.
+
+## What survives
+
+- `math_verify` (sympy) and the Wikidata channel are **deterministic and exact**. They are
+  unaffected: they check the claim itself, not a passage against an answer.
+- `retrieval.py` v2 (7 providers live, `fetch_page` with trafilatura/crawl4ai tiers, spaCy
+  entities) is real infrastructure and works.
+- The three retrieval bugs (dead backend, verbatim query, conjunction against one entity)
+  were real and are fixed.
+- The Wilson-CI harness and the "abstention is not accuracy" scoring are correct.
+
+## What does not survive
+
+- The judge accuracy number.
+- The trained verifier as a verifier. It learned the shortcut. **Do not ship it.**
+- Any claim that HaluEval is a verification benchmark.
+
+## The pattern, three times in one session
+
+1. "Coverage 0.00" → the search backend was dead.
+2. "Coverage 0.00 after calibration" → the adapter produced no claims.
+3. "Accuracy 1.000 / judge 0.886" → the dataset was extractive.
+
+Each time the number looked like a verdict and dissolved when I checked how it was produced.
+The rule that would have caught all three: **before trusting a metric, run the dumbest
+possible baseline against the same data.** A two-line substring rule would have exposed
+HaluEval immediately.
+
+## Next
+
+See `knowledge/BUDGET-REQUEST-cascade-and-verifier.md`. The job is no longer "fine-tune a
+judge" — it is "build data where judging is not string matching". Our own 2,281 harvested
+and 19,303 spine rows are non-extractive claims we already own; that is the free starting
+point.
