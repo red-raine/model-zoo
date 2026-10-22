@@ -1,0 +1,69 @@
+{
+  "baselines": {
+    "n": 200,
+    "label_dist": {
+      "REFUTED": 121,
+      "SUPPORTED": 50,
+      "NOT_ENOUGH_EVIDENCE": 13,
+      "CONFLICTING": 16
+    },
+    "majority": {
+      "label": "REFUTED",
+      "accuracy": 0.605,
+      "ci95": [
+        0.5359,
+        0.6702
+      ]
+    },
+    "substring": {
+      "accuracy": 0.605,
+      "ci95": [
+        0.5359,
+        0.6702
+      ]
+    },
+    "random": {
+      "accuracy": 0.315,
+      "ci95": [
+        0.2546,
+        0.3824
+      ]
+    }
+  },
+  "model": {
+    "n": 200,
+    "accuracy": 0.245,
+    "ci95": [
+      0.1906,
+      0.309
+    ],
+    "macro_f1": 0.2416,
+    "unparsed": 4,
+    "seconds": 719.7,
+    "ms_per_claim": 3598.5,
+    "confusion": {
+      "CONFLICTING": {
+        "SUPPORTED": 8,
+        "CONFLICTING": 7,
+        "REFUTED": 1
+      },
+      "NOT_ENOUGH_EVIDENCE": {
+        "NOT_ENOUGH_EVIDENCE": 5,
+        "SUPPORTED": 6,
+        "CONFLICTING": 2
+      },
+      "REFUTED": {
+        "SUPPORTED": 77,
+        "NOT_ENOUGH_EVIDENCE": 13,
+        "REFUTED": 4,
+        "CONFLICTING": 27
+      },
+      "SUPPORTED": {
+        "CONFLICTING": 14,
+        "SUPPORTED": 33,
+        "NOT_ENOUGH_EVIDENCE": 1,
+        "REFUTED": 2
+      }
+    }
+  }
+}

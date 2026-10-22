@@ -520,3 +520,91 @@ See `knowledge/BUDGET-REQUEST-cascade-and-verifier.md`. The job is no longer "fi
 judge" — it is "build data where judging is not string matching". Our own 2,281 harvested
 and 19,303 spine rows are non-extractive claims we already own; that is the free starting
 point.
+
+---
+
+# Part 7 — the verifier bet FAILED, on a real benchmark
+
+## Setup
+
+AVeriTeC (GitHub raw, free) → 4-way verifier data:
+- **train 3,067** — SUPPORTED 848 / REFUTED 1,742 / CONFLICTING 195 / NOT_ENOUGH_EVIDENCE 282
+- **dev 500** — REFUTED 305 / SUPPORTED 122 / CONFLICTING 38 / NEI 35
+- Extractiveness **0.0% dev / 0.1% train** (vs HaluEval 95.5%) — a real instrument
+- Gated: **the gate caught 1 TruthfulQA contamination inside AVeriTeC train**, plus 8 PII redactions. 3,066 rows CLEAN.
+
+Trained LFM2.5-350M, LoRA r16, 512 seq, 2,300 steps, 12.8 min, loss 0.071.
+
+## Baselines first (the lesson from HaluEval)
+
+| baseline | accuracy | CI95 |
+|---|---|---|
+| always-majority (`REFUTED`) | **0.610** | [0.567, 0.652] |
+| substring rule | 0.608 | [0.565, 0.650] |
+| random over 4 labels | ~0.25 | — |
+
+The substring rule **collapsed from 0.975 on HaluEval to 0.608 here** — exactly chance.
+That confirms AVeriTeC measures verification and HaluEval measured matching.
+
+## Result
+
+| model | accuracy | CI95 | macro-F1 | ms/claim |
+|---|---|---|---|---|
+| **350M verifier** | **0.245** | [0.191, 0.309] | 0.242 | 3,599 |
+
+**−0.360 versus the majority baseline. It is worse than doing nothing.**
+
+Confusion on the 200-row eval slice:
+
+```
+gold REFUTED   (121): SUPPORTED 77 · CONFLICTING 27 · REFUTED 4
+gold SUPPORTED  (50): SUPPORTED 33 · CONFLICTING 14 · NEI 1 · REFUTED 2
+```
+
+It almost **never predicts REFUTED** — the opposite of the majority class. It did not
+learn the trivial prior, let alone the task.
+
+## Why it failed (three candidate causes, ranked)
+
+1. **512-token truncation eats the evidence.** AVeriTeC prompts are ~1,600 chars of
+   evidence plus the claim plus the template — roughly 500-600 tokens, so truncation
+   removes the tail of the evidence. The model may be training on partial evidence and
+   inferring from the claim alone.
+2. **3,067 training examples is small** for 4-way with a 57/28/6/9 imbalance.
+3. **350M may simply be too small** for 4-way claim verification with abstention.
+
+Loss 0.071 on train versus 0.245 accuracy on dev is textbook memorisation: it fit 3,067
+rows and generalised to nothing.
+
+## What this establishes
+
+- **HaluEval was the wrong dataset** and AVeriTeC is the right one. Confirmed by baseline.
+- **A 350M model cannot do this task** from 3k examples at 512 tokens. That is a real,
+  useful negative result — it means "shrink the judge" was the wrong instinct.
+- **The deterministic channels are far weaker than I claimed.** They settled **2 of 3,067**
+  claims (0.07%). I had said "Boolean and Extractive answers are what sympy and Wikidata
+  can settle exactly" — wrong: `answer_type` describes the *evidence answer format*, not
+  whether the claim is arithmetic or an entity relation. The Wikidata patterns only cover
+  "X is in Y" and "X is the capital of Y", which almost no AVeriTeC claim matches.
+
+## What to try next, in order
+
+1. **Fix truncation first** — 2,048 seq so the evidence fits. This is the cheapest
+   possible change and the most likely cause. (Costs ~5 steps/min on the Arc, so ~2 h.)
+2. **Then scale the model** to LFM2.5-1.2B before concluding the task needs a frontier model.
+3. **Widen the deterministic channels** — the current Wikidata patterns are far too narrow.
+   A general entity-relation extractor plus SPARQL would cover far more than 0.07%.
+4. **Do not re-run at 350M/512.** The result is unambiguous.
+
+## The honest summary of this whole line of work
+
+Four measurements today, each of which dissolved when checked:
+
+1. judge accuracy 0.886 → **the dataset was 95.5% extractive**
+2. trained verifier 1.000 → **it learned substring matching**
+3. coverage 0.00 → **the adapter produced no claims**
+4. 350M on AVeriTeC 0.245 → **worse than the majority baseline**
+
+The one thing that survived every check is the **deterministic channels and the
+infrastructure** (retrieval ladder, gate cascade, baselines harness, Wilson CIs). The
+models have not earned a place in the pipeline yet.
