@@ -608,3 +608,90 @@ Four measurements today, each of which dissolved when checked:
 The one thing that survived every check is the **deterministic channels and the
 infrastructure** (retrieval ladder, gate cascade, baselines harness, Wilson CIs). The
 models have not earned a place in the pipeline yet.
+
+---
+
+# Part 8 — the failure was CODE, not model capacity (operator was right)
+
+> Operator: *"the consistency of the failures points to bad code"*
+
+Correct, and it was the right call. I had concluded "350M is too small for this task". That
+conclusion was premature. The diagnostic signature I missed:
+
+- accuracy **0.245**, macro-F1 **0.242** — *exactly* chance over 4 classes
+- it **never predicted REFUTED** despite REFUTED being 57% of training — the opposite of
+  the majority prior
+- **`loss 0.071` reported by the trainer while per-row loss was 4.58–5.24**
+
+A capacity-limited model still learns the majority prior. A model at exact chance with an
+*inverted* bias is a broken input→output mapping. The 0.071-vs-4.9 contradiction was the
+smoking gun and I should have caught it before writing "the bet failed".
+
+## The bug
+
+`train_arc.py` built training text by hand:
+
+```python
+f"<|user|>\n{prompt}\n<|assistant|>\n{completion}"
+```
+
+LFM2.5's **native** template is:
+
+```
+<|startoftext|><|im_start|>user\n…<|im_end|>\n<|im_start|>assistant\n
+```
+
+So every model we trained (v6, harvested, HaluEval, AVeriTeC) was trained on a chat format
+the base model had **never seen**, with **no `<|im_end|>`**, so it never learned to stop.
+Observed generations were degenerate repetition:
+
+```
+'CONFLICTING.SUPPORTED.SUPPORTED.SUPPORTED'
+'REFREFREFREFREFREFREFREFREF...'
+'ocumented immigrants in modern modern modernmo'
+```
+
+It was echoing my own label list back at me.
+
+## The fix
+
+`train_arc.py` and `eval_averitec.py` both now use `tok.apply_chat_template(...)`, so
+training and inference share the model's own format and `<|im_end|>` is present.
+
+## Measured effect (100-row overfit test, 400 steps)
+
+| | accuracy @ 50 rows |
+|---|---|
+| hand-built `<|user|>` template | 0.270 |
+| **native `apply_chat_template`** | **0.400** |
+
+It is learning now. 400 steps on 100 rows is not enough to fully overfit, so this is
+directional, not conclusive.
+
+## Still unexplained
+
+The trainer reports `loss ≈ 0.097` in **both** runs, while true per-row loss is ~4.9. The
+reported loss is not the training objective I think it is — most likely TRL is masking most
+tokens and computing loss over very few. **Do not trust `train_arc.py`'s loss number until
+that is resolved.** Accuracy is the only signal that has been reliable.
+
+## What this invalidates
+
+- **"350M is too small"** — withdrawn. Not established.
+- **The 0.245 AVeriTeC result** — produced by a model trained on a broken format. It
+  measures the bug, not the architecture.
+- **Every prior training run** used the same hand-built template, including the v6 run that
+  produced TRACE 0.253. Those numbers are suspect for the same reason and should be re-run.
+
+## The methodological lesson (fourth time today)
+
+| symptom | what I first concluded | what it actually was |
+|---|---|---|
+| judge 0.886 | "the judge is fine" | dataset 95.5% extractive |
+| verifier 1.000 | "it works" | substring matching |
+| coverage 0.00 | "calibration too strict" | adapter produced no claims |
+| accuracy 0.245 | "350M too small" | **hand-built chat template** |
+
+The rule that catches all four: **when a model performs at exactly chance, suspect the
+plumbing before the capacity.** And: *if two measurements of the same thing disagree
+(trainer loss 0.07 vs per-row loss 4.9), stop and find out why before reporting either.*

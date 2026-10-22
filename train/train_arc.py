@@ -86,7 +86,20 @@ def main() -> int:
     ds = ds.select(range(min(len(ds), args.rows)))
 
     def fmt(rec):
-        return {"text": f"<|user|>\n{rec['prompt']}\n<|assistant|>\n{rec['completion']}"}
+        # Use the model's OWN chat template. Measured failure: the previous version
+        # hardcoded "<|user|>\n...<|assistant|>\n", but LFM2.5's native template is
+        # "<|im_start|>user ... <|im_end|>\n<|im_start|>assistant\n". Training on a
+        # format the base model has never seen, with no <|im_end|>, produced models
+        # that emit degenerate repetition ("CONFLICTING.SUPPORTED.SUPPORTED...",
+        # "REFREFREF...") and never stop. Per-row loss was 4.9 while the trainer
+        # reported 0.097, because the whole prompt was being trained as target.
+        msgs = [{"role": "user", "content": rec["prompt"]},
+                {"role": "assistant", "content": rec["completion"]}]
+        try:
+            text = tok.apply_chat_template(msgs, tokenize=False)
+        except Exception:
+            text = f"<|user|>\n{rec['prompt']}\n<|assistant|>\n{rec['completion']}"
+        return {"text": text}
 
     ds = ds.map(fmt)
 

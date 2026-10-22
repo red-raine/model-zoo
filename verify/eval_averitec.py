@@ -120,7 +120,9 @@ def eval_model(rows: list[dict], adapter: str, limit: int = 0) -> dict:
     t0 = time.time()
     with torch.no_grad():
         for i, r in enumerate(rows, 1):
-            text = f"<|user|>\n{r['prompt']}\n<|assistant|>\n"
+            # MUST match training: the model's native chat template.
+            text = tok.apply_chat_template([{"role": "user", "content": r["prompt"]}],
+                                           tokenize=False, add_generation_prompt=True)
             ids = tok(text, return_tensors="pt", truncation=True, max_length=512)
             out = m.generate(**ids, max_new_tokens=12, do_sample=False,
                              pad_token_id=tok.eos_token_id)
