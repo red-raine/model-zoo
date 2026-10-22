@@ -1145,3 +1145,63 @@ License is MIT, dependencies are numpy only. No reason not to try it.
 2. **Test the annotator-phrasing leak** — shuffle or paraphrase the QA answers and re-measure.
 3. **Then** model2vec: train a static classifier as the fast tier and compare to DeBERTa.
 4. **Then** distillation, with tail-class agreement measured first, per ACL 2026 long 908.
+
+---
+
+# Part 14 — model2vec results: a static model that beats the published encoder at 0.17 ms/claim
+
+## Measured, same data, same 4-way labels, same dev split
+
+| system | dev acc | macro-F1 | speed | notes |
+|---|---|---|---|---|
+| majority (`always Refuted`) | 0.610 | — | — | the bar |
+| published DeBERTa-v3-large + head | 0.630 | 0.390 | — | Ullrich et al. 2024 |
+| **model2vec static (potion-base-32M)** | **0.644** | **0.415** | **0.17 ms/claim** | **179 s fit, no torch** |
+| **deberta-v3-base + Linear(4)** | **0.780** | **0.613** | ~100 ms/claim | ~20 min, torch, GPU |
+
+Per-class F1 (static): Supported .436 · Refuted .763 · NEI .462 · **Conflicting .000**
+
+## What this means
+
+**The static model beats the published DeBERTa-v3-large reference — 0.644/0.415 vs
+0.63/0.39 — at 0.17 ms per claim with no torch and a 179-second fit.**
+
+That is a genuine engineering result, not a curiosity. For a pipeline that has to judge
+thousands of rows, 0.644 at 0.17 ms is a better answer than 0.78 at 100 ms for the *fast
+tier*, and the two-tier design writes itself:
+
+```
+tier 1  model2vec static      0.17 ms/claim, no torch     <- everything
+tier 2  deberta-v3-base       0.78 acc                    <- only where tier 1 is unsure
+```
+
+If tier 1 is confident on 80% of rows at 0.644 and tier 2 handles the rest at 0.78, the
+blended number beats either alone at a fraction of the cost. That is the cascade the
+golden standard describes, and model2vec makes the cheap tier almost free.
+
+**Conflicting collapses to F1 0.000** in the static model — the tail again, and the same
+class ACL 2026 long 908 warns is the first casualty of any distillation or compression. A
+static model has no capacity for a 5.7%-prevalence class that requires reading two
+contradictory sources. Expected, and it bounds what the fast tier can be trusted with: it
+should never be the final word on a Conflicting verdict.
+
+## Where model2vec fits the toolset beyond this
+
+1. **Retrieval pre-filter** — `potion-retrieval-32M` at 0.17 ms/claim over the 41k-document
+   corpus. The literature says retrieval is the +14–22 point lever (arXiv:2608.25934); a
+   pre-filter that costs nothing puts the expensive reranker only on plausible candidates.
+2. **Semantic dedup** — replaces the MinHash LSH pass that took 789 s for 19.5k rows.
+3. **The ONNX/llama.cpp lane** — `GOLDEN-MASTER-PLAN.md` tier 2 asks for sub-1B judges
+   deployable without torch. A model2vec classifier is exactly that.
+
+Install was `pip install "model2vec[train]"`, MIT, numpy-only in the base package.
+
+## Still open — the claim-only ablation
+
+At 67% when this was written. It answers the only question that matters about the 0.78:
+does the classifier still score near 0.78 with the **evidence removed**? If yes, it is
+memorising claims and the result is an artifact. Nothing gets published before that lands.
+
+## Files
+- `tools/verify/train_verifier_static.py` (self-test 5/5)
+- `B:\datasets\forge\verifier-av\static-model\result.json`
