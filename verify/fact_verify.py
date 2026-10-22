@@ -130,6 +130,15 @@ def entities(claim: str) -> list[str]:
         if len(e) > 2 and e.lower() not in seen:
             seen.add(e.lower())
             uniq.append(e)
+    # spaCy separates entities the capitalised-run regex glues together
+    # ("Reagan and Give Us Our Skeletons" -> "Reagan" + "Give Us Our Skeletons")
+    try:
+        from retrieval import spacy_entities
+        sp = spacy_entities(claim)
+        if len(sp) >= len(uniq):
+            return sp
+    except Exception:
+        pass
     return uniq
 
 
@@ -445,7 +454,8 @@ def judge_pair(claim: str, snip: dict, endpoint: str, model: str,
 
 
 def verify_text(text: str, endpoint: str, model: str, max_claims: int,
-                min_support: int = 2, pairwise: bool = True) -> dict:
+                min_support: int = 2, pairwise: bool = True,
+                deep_fetch: int = 2) -> dict:
     claims = extract_claims(text, max_claims)
     # atomic decomposition: a conjunction cannot be judged against one entity's evidence
     atomic: list[str] = []
@@ -488,6 +498,24 @@ def verify_text(text: str, endpoint: str, model: str, max_claims: int,
             results.append({"claim": c, "verdict": "UNKNOWN",
                             "why": "no_sources", "sources": 0, "query": used_q})
             continue
+        # Snippet-level evidence is a teaser. Fetch the top N pages and swap the
+        # snippet for real main-content text. The extraction tier is recorded so
+        # the evidence row carries provenance.
+        if deep_fetch and snips:
+            try:
+                from retrieval import fetch_page
+                tiers = []
+                for s in snips[:deep_fetch]:
+                    fp = fetch_page(s.get("url") or "")
+                    if fp.get("text") and fp.get("chars", 0) > 400:
+                        s["content"] = fp["text"][:1800]
+                        s["extract_tier"] = fp["tier"]
+                        tiers.append(fp["tier"])
+                if tiers:
+                    used_q = f"{used_q} [fetched: {','.join(sorted(set(tiers)))}]"
+            except Exception:
+                pass
+
         if pairwise:
             # One call per snippet. A single confident snippet must not be able to
             # carry a TRUE verdict: the measured failure was dangerous=1.000,
