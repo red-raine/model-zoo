@@ -95,8 +95,16 @@ class LeanResult:
 
     @property
     def trustworthy(self) -> bool:
-        """True only if a machine check (Lean) actually ran."""
-        return self.available and self.method.startswith("tactic")
+        """True only if a machine check (Lean) actually ran.
+
+        BOTH proof paths count: a tactic proof of the proposition, and `rfl` on a
+        literal-substituted Bool encoding. An earlier version tested only
+        `method.startswith("tactic")`, which marked every `rfl` result untrustworthy even
+        though Lean's kernel had evaluated it -- so the verifier reported false failures on
+        exactly the rules that needed the fallback path.
+        """
+        return self.available and (self.method.startswith("tactic")
+                                   or self.method.startswith("rfl"))
 
 
 def find_lean() -> str | None:
@@ -190,10 +198,14 @@ def lean_bool_source(premises: list[prop.Node], conclusion: prop.Node) -> str:
         prem_lit = (" && ".join(_render_bool_literal(p, assign) for p in premises)
                     if premises else "true")
         conc_lit = _render_bool_literal(conclusion, assign)
+        # The negation MUST wrap the whole operand. `!a && b || c` parses as `(!a) && b || c`,
+        # which negates only the first conjunct -- that silently made the constructive and
+        # destructive dilemma rows assert the wrong proposition, and Lean correctly rejected
+        # them. The tactic path had masked this for every simpler rule.
         if is_cex:
-            lines.append(f"example : ({prem_lit} && !{conc_lit}) = true := by rfl")
+            lines.append(f"example : (({prem_lit}) && !({conc_lit})) = true := by rfl")
         else:
-            lines.append(f"example : (!{prem_lit} || {conc_lit}) = true := by rfl")
+            lines.append(f"example : (!({prem_lit}) || ({conc_lit})) = true := by rfl")
     return "\n".join(lines) + "\n"
 
 

@@ -307,6 +307,32 @@ def negation_blindness_risk(text: str) -> list[Finding]:
         citation="Kassner & Schutze 2020; arXiv:2609.13685 (affixal > syntactic)")]
 
 
+# Common English irregular verbs mapped to a shared stem. Small on purpose: it covers the
+# verbs that actually appear in factual claims, and anything missing simply falls through to
+# suffix stripping rather than being guessed at.
+_IRREGULAR = {
+    "found": "find", "find": "find", "finds": "find",
+    "rose": "rise", "rise": "rise", "rises": "rise", "risen": "rise",
+    "fell": "fall", "fall": "fall", "falls": "fall", "fallen": "fall",
+    "was": "be", "were": "be", "is": "be", "are": "be", "been": "be", "be": "be", "am": "be",
+    "had": "have", "has": "have", "have": "have", "having": "have",
+    "did": "do", "does": "do", "do": "do", "done": "do", "doing": "do",
+    "went": "go", "goes": "go", "go": "go", "gone": "go",
+    "took": "take", "takes": "take", "take": "take", "taken": "take",
+    "gave": "give", "gives": "give", "give": "give", "given": "give",
+    "made": "make", "makes": "make", "make": "make",
+    "said": "say", "says": "say", "say": "say",
+    "saw": "see", "sees": "see", "see": "see", "seen": "see",
+    "came": "come", "comes": "come", "come": "come",
+    "knew": "know", "knows": "know", "know": "know", "known": "know",
+    "grew": "grow", "grows": "grow", "grow": "grow", "grown": "grow",
+    "showed": "show", "shows": "show", "show": "show", "shown": "show",
+    "led": "lead", "leads": "lead", "lead": "lead",
+    "won": "win", "wins": "win", "win": "win",
+    "lost": "lose", "loses": "lose", "lose": "lose",
+}
+
+
 def check_pair_contradiction(claim_a: str, claim_b: str, lexicon=None) -> list[Finding]:
     """L8 / consistency: do two claims contradict?
 
@@ -340,6 +366,12 @@ def check_pair_contradiction(claim_a: str, claim_b: str, lexicon=None) -> list[F
         regular-verb cases -- which is what almost every real 'X is Y' / 'X is not Y' claim
         looks like -- are covered.
         """
+        # Irregular verbs first: suffix stripping cannot unify found/find, rose/rise,
+        # was/be. Without this map the contradiction detector silently missed the most
+        # natural phrasing of a negation flip ("the trial found X" / "did not find X").
+        irr = _IRREGULAR.get(w)
+        if irr:
+            return irr
         for suf in ("ing", "ed", "es", "s", "d"):
             if len(w) > 4 and w.endswith(suf):
                 return w[: -len(suf)]
@@ -363,12 +395,25 @@ def check_pair_contradiction(claim_a: str, claim_b: str, lexicon=None) -> list[F
             citation="propositional.entails (exhaustive)"))
 
     if lexicon is not None:
-        wa, wb = norm(claim_a), norm(claim_b)
+        # Antonymy is looked up on SURFACE tokens, not stems: a lexicon keys on lemmas
+        # ("rose", "fell"), and stemming to "rise"/"fall" first made the lookup miss. Both
+        # forms are tried because WordNet stores some inflections and not others.
+        wa = re.sub(r"[^a-z ]+", " ", claim_a.lower()).split()
+        wb = re.sub(r"[^a-z ]+", " ", claim_b.lower()).split()
         if len(wa) == len(wb) and wa:
             diffs = [(x, y) for x, y in zip(wa, wb) if x != y]
             if len(diffs) == 1:
                 x, y = diffs[0]
-                if y in lexicon.antonyms(x) or x in lexicon.antonyms(y):
+                def _ant(a: str, b: str) -> bool:
+                    for aa in {a, _stem(a)}:
+                        for bb in {b, _stem(b)}:
+                            try:
+                                if bb in lexicon.antonyms(aa):
+                                    return True
+                            except Exception:      # noqa: BLE001
+                                pass
+                    return False
+                if _ant(x, y) or _ant(y, x):
                     out.append(Finding(
                         defect=Defect.LOCAL_COHERENCE,
                         frame="contradiction via antonym substitution",
@@ -563,11 +608,25 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] regular-verb negation matched after stemming")
 
-    # and the documented limitation is real, not silently wrong: irregulars do NOT unify
-    f = check_pair_contradiction("sales rose in the quarter", "sales did not rise in the quarter")
+    # irregular verbs are unified by an explicit map, not left to suffix stripping
+    f = check_pair_contradiction("the trial found a benefit",
+                                 "the trial did not find a benefit")
+    good = len(f) == 1
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] irregular verb pair (found/find) IS matched")
+
+    f = check_pair_contradiction("sales rose in the quarter",
+                                 "sales did not rise in the quarter")
+    good = len(f) == 1
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] irregular verb pair (rose/rise) IS matched")
+
+    # the surviving limitation is paraphrase: the detector needs the same content words
+    f = check_pair_contradiction("sales rose in the quarter",
+                                 "revenue did not increase in the quarter")
     good = len(f) == 0
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] irregular verb pair (rose/rise) is NOT matched "
+    print(f"  [{'PASS' if good else 'FAIL'}] paraphrase (rose/increase) is NOT matched "
           f"-- known limitation, asserted so it stays known")
 
     # --- contradiction by antonym requires the lexicon; construct a tiny stub
