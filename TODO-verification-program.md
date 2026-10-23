@@ -25,7 +25,14 @@
 
 ## Phase 1 — the three agreed next steps
 
-### 1.1 ⬜ Measurement harness (5-fold CV + bootstrap CI + ablation flip)
+### 1.1 🔨 Measurement harness — BUILT (9/9 tests), results in `knowledge/measurement-harness-results.md`
+> **Outcome: the CTU head swap is real (macro-F1 +0.0908, CI [+0.028,+0.150], McNemar p=0.0016),
+> but the "Conflicting doubled .214 -> .362" claim I made is NOT supported: paired CI is
+> [-0.038,+0.323] and contains zero at n=38. Only Supported (+0.188) and Refuted (+0.055) are
+> established. The tail fix must come from the aggregator, not the backbone.**
+> **Remaining on this item: run the ablation flip rate on the real checkpoint (implemented and
+> stub-tested, never executed).** Also: cross-fit the evaluation so Conflicting stops being
+> unmeasurable at n=38.
 - **Why:** ~60 Conflicting positives in 500 dev rows ⇒ 1σ on that class's F1 ≈ ±0.08. **Any gain
   below ~0.10 on Conflicting is unmeasurable on one split.** Without this, every later item is
   unfalsifiable.
