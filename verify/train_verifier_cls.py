@@ -72,6 +72,9 @@ def load(split: str, limit: int = 0) -> list[dict]:
     return rows[:limit] if limit else rows
 
 
+CLAIM_ONLY = os.environ.get("CLAIM_ONLY") == "1"
+
+
 def to_example(rec: dict) -> dict | None:
     """One example per claim: [CLS] claim [SEP] q1 a1 [SEP] q2 a2 ...
 
@@ -91,7 +94,10 @@ def to_example(rec: dict) -> dict | None:
     ev = ev.split("Answer with exactly one word")[0].strip()
     if not ev:
         return None
-    text = f"{claim} [SEP] {ev}"
+    # CLAIM_ONLY=1 drops the evidence entirely. This is the shortcut test: if accuracy
+    # stays near the with-evidence number, the model is memorising claims, not verifying
+    # them -- and a 0.78 that beats the human-agreement ceiling (0.714) demands this check.
+    text = f"{claim} [SEP] {ev}" if not CLAIM_ONLY else claim
     return {"text": text, "label": L2I[gold], "claim": claim}
 
 
@@ -159,6 +165,14 @@ def main(argv=None) -> int:
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--out", default=os.environ.get("VERIFIER_OUT", r"B:\datasets\forge\verifier-av\cls-model"))
+    # --calib N carves N rows OUT of train as a held-out calibration split. Those rows are
+    # never trained on, so logits on them are honest and the uncertainty head / conformal
+    # quantile fitted there is not contaminated. Dev stays untouched as the final test set.
+    ap.add_argument("--calib", type=int, default=0,
+                    help="carve N rows from train as a held-out calibration split")
+    ap.add_argument("--dump-logits", action="store_true",
+                    help="write logits for fit/calib/dev so the uncertainty layer can be fitted")
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
 
@@ -177,6 +191,26 @@ def main(argv=None) -> int:
           f"{ {I2L[k]: v for k, v in sorted(collections.Counter(tr_y).items())} }")
     print(f"[cls] dev labels:   "
           f"{ {I2L[k]: v for k, v in sorted(collections.Counter(dv_y).items())} }")
+
+    # Hold out a calibration split INSIDE train. Dev must never be used to fit a calibrator,
+    # a conformal quantile, or a correctness head -- otherwise the coverage guarantee is
+    # measured on data the guarantee was fitted on, which is the classic way to report a
+    # perfect number that means nothing.
+    cal_x, cal_y = [], []
+    if args.calib and args.calib > 0:
+        order = list(range(len(tr_x)))
+        random.Random(args.seed).shuffle(order)
+        held = set(order[: args.calib])
+        keep = [i for i in range(len(tr_x)) if i not in held]
+        cal_idx = sorted(held)
+        cal_x = [tr_x[i] for i in cal_idx]
+        cal_y = [tr_y[i] for i in cal_idx]
+        tr_x = [tr_x[i] for i in keep]
+        tr_y = [tr_y[i] for i in keep]
+        print(f"[cls] calibration carve: fit {len(tr_x)} · calib {len(cal_x)} "
+              f"(seed {args.seed}, never trained on)")
+        print(f"[cls] calib labels: "
+              f"{ {I2L[k]: v for k, v in sorted(collections.Counter(cal_y).items())} }")
 
     tok = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -261,6 +295,42 @@ def main(argv=None) -> int:
     print(f"    human annotator agreement ceiling   0.7140 acc")
     with open(os.path.join(args.out, "result.json"), "w") as fh:
         json.dump({k: v for k, v in m.items()}, fh, indent=2, default=str)
+
+    # ---------------------------------------------------------------- checkpoint + logits
+    # The previous run wrote only result.json, so the trained weights were lost and no
+    # downstream analysis was possible without retraining. Save the model and dump per-row
+    # logits once, so calibration / conformal / correctness-head work is pure numpy after.
+    try:
+        trainer.save_model(args.out)
+        tok.save_pretrained(args.out)
+        print(f"[cls] checkpoint saved -> {args.out}")
+    except Exception as e:  # noqa: BLE001 - never lose the metrics over a save failure
+        print(f"[cls] WARN checkpoint save failed: {e}")
+
+    if args.dump_logits:
+        import numpy as _np
+        rows = []
+        splits = [("fit", tr_x, tr_y)]
+        if cal_x:
+            splits.append(("calib", cal_x, cal_y))
+        splits.append(("dev", dv_x, dv_y))
+        for name, xs, ys in splits:
+            out = trainer.predict(DS(xs, ys))
+            lg = _np.asarray(out.predictions)
+            if lg.ndim == 1:
+                lg = lg.reshape(-1, 1)
+            pred = _np.argmax(lg, axis=-1)
+            acc = float((pred == _np.asarray(ys)).mean())
+            print(f"[cls] logits[{name}] n={len(xs)} acc={acc:.4f}")
+            for x, y, p, row in zip(xs, ys, pred, lg.tolist()):
+                rows.append({"split": name, "label": int(y), "pred": int(p),
+                             "logits": [round(v, 6) for v in row],
+                             "text": x})
+        lp = os.path.join(args.out, "logits.jsonl")
+        with open(lp, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"[cls] logits dumped -> {lp} ({len(rows)} rows)")
     return 0
 
 
