@@ -185,3 +185,147 @@ number that looked good and measured nothing:
    **swapped** (`[1,0,2,3]`); unmapped, it invents ~250 phantom label errors.
 3. Treating two models trained on the same labels as **independent voters** — measured lift
    2.22×, i.e. strongly correlated.
+
+---
+
+# Part 2 — CORRECTION: the finder failed because I built it wrong, not because the idea is wrong
+
+## What I actually did wrong
+
+I measured "two models agree against gold" using `deberta-v3-base` fine-tuned on AVeriTeC
+train and the CTU large fine-tuned on AVeriTeC train — **the same corpus** — and reported the
+resulting 2.22x error-correlation lift as if it were a fact about model ensembles.
+
+It was a fact about my experimental design. Correlated errors in ensembles that share
+training data is textbook; it is why confident learning (Northcutt et al., JAIR 2022;
+"Pervasive Label Errors in Test Sets Destabilize Machine Learning Benchmarks", NeurIPS 2021)
+uses **cross-validated out-of-fold** predictions rather than two models trained on
+everything. I hand-rolled weighted signals on a confounded setup, got a bad number, and then
+dressed my own design error up as a discovery. That is the fourth number this session that
+looked like a finding and was an artifact of how I built the thing.
+
+## The experiment that should have been run
+
+Frozen backbone (no AVeriTeC fine-tuning), then heads trained on **disjoint** data. First
+attempt at arm A was *still* degenerate — two logistic regressions on identical features give
+identical predictions (agreement 1.000, phi 1.0000), which measures nothing. Fixed by giving
+both arms the same head-type pair (logistic vs MLP) so the only variable is data overlap:
+
+| arm | heads | agreement | error A | error B | lift | phi(errorA, errorB) |
+|---|---|---|---|---|---|---|
+| **disjoint** | logistic(S1) vs MLP(S2) | 0.625 | 0.399 | 0.360 | **1.63** | **+0.387** |
+| **shared** | logistic(S1∪S2) vs MLP(S1∪S2) | 0.754 | 0.340 | 0.350 | **2.06** | **+0.561** |
+
+**Δphi = +0.174.** Sharing training data does inflate error correlation, in the direction
+claimed and at a moderate magnitude — not the 2.22x catastrophe I reported, and not a
+discovery, just a well-known effect I had failed to control for.
+
+## Validating the finder against ground truth, not a proxy
+
+Validating against `required_reannotation` asks "does this find rows the humans doubted",
+which is a proxy. The self-test injects **known** label corruption into synthetic data:
+
+```
+injected 10% label noise in 3000 rows -> cross-fitted heads -> cleanlab ranking
+  precision@300 = 0.950     (base rate 0.10)
+  clean rows in the top 300: 1.7%
+```
+
+That is a real test. Compare the earlier hand-rolled finder: **0.5774 AUC against a proxy**.
+
+On real data: 5-fold cross-fitted heads on frozen `deberta-v3-base` embeddings, OOF train
+accuracy 0.6404, cleanlab flags 913 of 3067 rows.
+
+| validation | value |
+|---|---|
+| AUC vs `required_reannotation` | **0.6055** |
+| earlier hand-rolled finder (dev) | 0.5774 |
+
+The proxy AUC is still weak — but that is a statement about the proxy, not about the finder.
+
+## The decisive test: does cleaning beat randomly deleting the same number of rows?
+
+Without this control, "I dropped 10% of train and dev went up" means nothing — a weak head on
+frozen embeddings is high-variance, so deleting any rows moves the number.
+
+| arm | held-out dev accuracy |
+|---|---|
+| all 3067 train rows | 0.6460 |
+| **cleanlab top 306 dropped** | **0.6840** |
+| random 306 dropped, 10 replicates | 0.6358 ± 0.0101 (min 0.622, max 0.660) |
+| **gain over random** | **+0.0482 = +4.8 sd** |
+
+**CLEANING HELPS.** The cleanlab suspects beat every one of the ten random draws. Dev was
+never used for fitting or for choosing the suspects.
+
+---
+
+# Part 3 — the CTU post-train, and a contamination trap it exposed
+
+Post-trained `ctu-aic/deberta-v3-large-AVeriTeC-nli` (435M) on the same 2566-row fit split,
+same 500 dev rows, bs2 x ga4 + gradient checkpointing (bs4 OOM'd at step 1:
+`UR_RESULT_ERROR_OUT_OF_RESOURCES`).
+
+| system | dev acc | macro-F1 | Conflicting F1 |
+|---|---|---|---|
+| majority | 0.610 | — | — |
+| published DeBERTa-v3-large | 0.630 | 0.390 | — |
+| our deberta-v3-base (2566 rows) | 0.7440 | 0.5876 | .214 |
+| CTU large **zero-shot** | 0.7960 | 0.6791 | .407 |
+| **CTU large post-trained** | **0.8080** | **0.6784** | **.362** |
+
+## The trap: our calibration split is contaminated for a transferred checkpoint
+
+| split | accuracy | top1-top2 margin |
+|---|---|---|
+| fit | 0.9981 | 11.55 |
+| **calib (500 rows carved from AVeriTeC train)** | **0.9260** | 10.90 |
+| dev | 0.8080 | 10.54 |
+
+Base had calib *below* dev (0.720 vs 0.744). Here calib sits **12 points above** dev. That is
+not generalisation — **CTU trained their checkpoint on AVeriTeC train, and our calibration
+carve comes from exactly there.**
+
+This is not cosmetic. Calibrating on it makes the selective-risk controller **violate its own
+guarantee**:
+
+| calibration source | T | alpha=0.15 calib risk | alpha=0.15 DEV risk | verdict |
+|---|---|---|---|---|
+| train carve (contaminated) | 2.93 | 0.074 at coverage **1.000** | **0.186** | **VIOLATED** |
+| dev-half (clean, 249 rows) | 4.34 | 0.114 at coverage 0.807 | **0.102** | HELD |
+
+The contaminated controller promises 15% error and delivers 18.6% across *everything* — the
+worst possible failure for a gate, and it would have shipped as a success because the calib
+numbers looked excellent.
+
+`uncertainty.py --calib-from dev-half` now carves calibration from dev (unseen by any model)
+for transferred checkpoints.
+
+## Correct results for the CTU model (dev-half calibration, 249 calib / 251 test)
+
+- T = **4.34** — the model is 4.3x overconfident when honestly measured
+- dev ECE **0.1757 -> 0.0834**, Brier 0.3507 -> 0.2820, accuracy unchanged 0.8207
+- score selection: `max_p` 0.7962 / `neg_entropy` 0.7946 vs **correctness head 0.7812** — the
+  free score wins for the third time. The logistic head is not worth building.
+
+| alpha | calib cov / risk / UCB | DEV cov | DEV risk | DEV F1 | verdict |
+|---|---|---|---|---|---|
+| 0.05 | 0.000 | 0.000 | — | — | nothing certifiable |
+| 0.10 | 0.506 / 0.056 / 0.092 | 0.506 | **0.055** | 0.243 | HELD |
+| 0.15 | 0.807 / 0.114 / 0.149 | **0.817** | **0.102** | 0.739 | HELD |
+| 0.20 | 0.900 / 0.161 / 0.197 | 0.884 | 0.122 | 0.779 | HELD |
+| 0.25 | 1.000 / 0.205 / 0.241 | 1.000 | 0.179 | 0.737 | HELD |
+
+**Accept 82% of claims at 10.2% error, versus 17.9% error on everything** — nearly double the
+coverage of the deberta-v3-base controller (54% at 11.4%) at the same risk. AURC 0.0778.
+
+Mondrian still abstains on Not Enough Evidence (5 calibration rows) and Conflicting (34) —
+with 249 calibration rows there is nothing to certify. Unchanged conclusion: needs more
+calibration data per class, i.e. cross-fitting rather than a single carve.
+
+## Files added
+- `tools/verify/embed_frozen.py` — frozen-backbone embedding cache (self-test 3/3)
+- `tools/verify/label_errors_crossfit.py` — cross-fitted cleanlab detection + the disjoint/shared
+  arm + known-noise self-test (precision@300 = 0.950)
+- `tools/verify/clean_controls.py` — the two controls without which neither arm means anything
+- `tools/verify/uncertainty.py` — now `--calib-from dev-half` for transferred checkpoints

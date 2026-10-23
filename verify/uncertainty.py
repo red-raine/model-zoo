@@ -461,6 +461,14 @@ def main(argv=None) -> int:
                     help="target error rate on accepted claims")
     ap.add_argument("--delta", type=float, default=0.10,
                     help="confidence for the Clopper-Pearson bound")
+    # A transferred checkpoint may have already seen our calibration split. The CTU AVeriTeC
+    # model was trained by CTU on AVeriTeC *train*, and our calib carve comes from exactly
+    # there: measured calib acc 0.9260 vs dev 0.8080, a 12-point gap that is contamination,
+    # not generalisation. Calibrating on it would produce a confident, meaningless threshold.
+    # `dev-half` carves the calibration set out of dev instead, which no model has seen, at
+    # the cost of halving the test set.
+    ap.add_argument("--calib-from", choices=("calib", "dev-half"), default="calib")
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
@@ -472,6 +480,27 @@ def main(argv=None) -> int:
         print(f"[unc] need calib and dev splits, got {list(S)}")
         return 2
     out: dict = {"alpha": args.alpha, "delta": args.delta}
+
+    if args.calib_from == "dev-half":
+        d = S["dev"]
+        idx_all = np.arange(len(d["label"]))
+        rng = np.random.default_rng(args.seed)
+        ci, di = [], []
+        for c in range(N_CLASSES):
+            m = idx_all[d["label"] == c]
+            rng.shuffle(m)
+            h = len(m) // 2
+            ci += list(m[:h])
+            di += list(m[h:])
+        def take(sp, ids):
+            return {k: ([sp[k][i] for i in ids] if k == "text" else sp[k][ids])
+                    for k in sp}
+        S["calib"] = take(d, ci)
+        S["dev"] = take(d, di)
+        print(f"[unc] calib-from=dev-half: calibration {len(ci)} rows, test {len(di)} rows "
+              f"(both unseen by training; the 500-row train carve is contaminated for a "
+              f"transferred checkpoint)")
+
 
     # ---------------------------------------------------------------- 1. temperature
     cal, dev = S["calib"], S["dev"]
