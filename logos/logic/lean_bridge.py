@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,6 +92,7 @@ class LeanResult:
     stderr: str = ""
     elapsed_ms: float = 0.0
     agree_with_python: bool | None = None
+    has_sorry: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -103,6 +105,8 @@ class LeanResult:
         though Lean's kernel had evaluated it -- so the verifier reported false failures on
         exactly the rules that needed the fallback path.
         """
+        if self.has_sorry:
+            return False
         return self.available and (self.method.startswith("tactic")
                                    or self.method.startswith("rfl"))
 
@@ -218,6 +222,23 @@ def lean_prop_source(premises: list[prop.Node], conclusion: prop.Node,
     return (f"theorem goals {decl} {hyps} : {to_lean_prop(conclusion)} := by\n  {tactic}\n")
 
 
+SORRY = re.compile(r"\b(?:sorry|admit)\b")
+
+
+def has_sorry(source: str) -> bool:
+    """Detect `sorry` / `admit` in Lean source.
+
+    Measured: Lean ACCEPTS a proof containing `sorry` and exits 0 with only a warning, so a
+    naive "did it compile" check reports a proof of anything. This is not hypothetical -- a
+    boundary test in this project had Lean PROVE a bogus barber-paradox statement because the
+    proof body was `exact False.elim (by sorry)`.
+
+    Any claim of "Lean-verified" that does not check for `sorry` is worthless, which is why the
+    zero-sorry discipline exists and why it is enforced here rather than trusted.
+    """
+    return bool(SORRY.search(source))
+
+
 def _run_lean(source: str, lean_path: str, timeout: float = 120.0) -> tuple[bool, str, str, float]:
     """Compile a source string with Lean. Returns (ok, stdout, stderr, ms)."""
     tmpdir = tempfile.mkdtemp(prefix="logos_lean_")
@@ -264,6 +285,7 @@ def check(premise_texts: list[str], conclusion_text: str,
                 return LeanResult(available=True, proved=True, method=f"tactic:{tactic}",
                                   lean_version=lv, stdout=out, stderr=err, elapsed_ms=ms,
                                   agree_with_python=py_valid,
+                                  has_sorry=has_sorry(src),
                                   notes=[f"propositional goal closed by '{tactic}'"])
             # "unknown tactic" means the tactic is unavailable (no Mathlib), not that the
             # goal is unprovable. Distinguish those, because they mean very different things.
@@ -278,6 +300,7 @@ def check(premise_texts: list[str], conclusion_text: str,
         return LeanResult(available=True, proved=py_valid,
                           method="rfl:bool-encoding", lean_version=lv, stdout=out,
                           stderr=err, elapsed_ms=ms, agree_with_python=True,
+                          has_sorry=has_sorry(src),
                           notes=notes + ["Bool encoding of all valuations checked by rfl"])
 
     # 3) The Bool check failed. For a VALID argument that is a real disagreement between two
@@ -353,6 +376,24 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] Bool encoding emits one machine-checked row per "
           f"valuation ({bsrc.count('example')}/{n_rows})")
+
+    # --- SORRY MUST BE REFUSED. Lean compiles a `sorry` proof and exits 0, so a naive
+    #     "did it compile" check reports a proof of anything. Measured in this project: Lean
+    #     "proved" a bogus barber-paradox statement whose body was `exact False.elim (by sorry)`.
+    good = has_sorry("theorem t : False := by sorry")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] sorry detected in source")
+
+    good = not has_sorry("theorem t : P := h")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] clean source has no sorry")
+
+    # a result carrying sorry must NOT be trustworthy even if Lean accepted it
+    tainted = LeanResult(available=True, proved=True, method="tactic:exact h1 h2",
+                         has_sorry=True)
+    good = not tainted.trustworthy
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a sorry-tainted proof is NOT trustworthy")
 
     # --- a missing Lean must be reported as python_only, never as machine-checked
     r6 = check(["P"], "P | Q")
