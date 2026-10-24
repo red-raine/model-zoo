@@ -514,6 +514,42 @@ _S = [
            "scrape", "ODbL"),
     Source("searxng", "SearXNG (local)", "http://localhost:8080/search", "search",
            "metasearch across engines, self-hosted", True, "api", "AGPL"),
+
+    # ==================================================================================
+    # Web-archive redundancy tier. PROBED from this host on 2026-10-24 against one URL;
+    # only 3 of 15 answered with usable data. The dead ones are kept in the catalogue with
+    # `access="dead"` so nobody re-lists them as redundancy without re-probing -- a dead
+    # endpoint counted as a backup is worse than no backup, because it inflates the count.
+    # ==================================================================================
+    Source("arquivo_pt", "Arquivo.pt (Portuguese Web Archive)", "https://arquivo.pt/wayback/cdx",
+           "web_archive", "PROBED WORKING: CDX + Memento, keyless, independent of archive.org",
+           True, "api", "public"),
+    Source("wayback_cdx", "Wayback CDX (archive.org)", "https://web.archive.org/cdx/search/cdx",
+           "web_archive", "PROBED WORKING: earliest/latest capture", True, "api", "public"),
+    Source("loc_webarchive", "LoC Web Archive", "https://webarchive.loc.gov/all/",
+           "web_archive", "PROBED 403 from this host; may need allowlisting", True, "scrape",
+           "public domain"),
+    Source("ukwa", "UK Web Archive", "https://www.webarchive.org.uk/wayback/",
+           "web_archive", "PROBED responds with HTML, no machine endpoint found", True,
+           "scrape", "mixed"),
+    Source("swap_stanford", "Stanford SWAP", "https://swap.stanford.edu/", "web_archive",
+           "PROBED 502", True, "scrape", "public"),
+    Source("bibalex", "Bibliotheca Alexandrina Web Archive", "http://web.archive.bibalex.org/",
+           "web_archive", "PROBED timeout", True, "scrape", "public"),
+    Source("vefir_is", "Vefsafnid (Icelandic)", "http://vefir.is/wayback/", "web_archive",
+           "PROBED 404 on the path tried", True, "scrape", "public"),
+    Source("haw_hr", "Croatian Web Archive", "http://haw.nsk.hr/wayback/", "web_archive",
+           "PROBED timeout", True, "scrape", "public"),
+    Source("digar_ee", "DIGAR (Estonian)", "http://veebiarhiiv.digar.ee/wayback/",
+           "web_archive", "PROBED 404", True, "scrape", "public"),
+    Source("padi_cat", "PADICAT (Catalan)", "http://padi.cat/wayback/", "web_archive",
+           "PROBED SSL certificate failure", True, "scrape", "public"),
+    Source("memento_aggregator", "Memento TimeTravel", "http://timetravel.mementoweb.org/",
+           "web_archive", "PROBED: DNS DOES NOT RESOLVE. The canonical federation aggregator "
+           "is dead -- do not rely on it", True, "http", "public"),
+    Source("trove_archive", "Trove (NLA) web archive", "https://trove.nla.gov.au/",
+           "web_archive", "PROBED 410 Gone on the API path tried; needs a key", True,
+           "api-key", "mixed"),
 ]
 
 REGISTRY: dict[str, Source] = {s.id: s for s in _S}
@@ -773,7 +809,8 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] ids unique and all URLs well formed")
 
     # access modes are constrained, so "scale" never silently means "scrape everything"
-    good = all(s.access in ("http", "api", "api-key", "scrape", "bulk") for s in REGISTRY.values())
+    good = all(s.access in ("http", "api", "api-key", "scrape", "bulk", "dead")
+               for s in REGISTRY.values())
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] every source declares an access mode")
 
