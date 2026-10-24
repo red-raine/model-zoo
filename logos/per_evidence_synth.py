@@ -140,20 +140,25 @@ def build_rows(facts=None) -> list[SynthRow]:
             span_labels=["support"], verdict_if_aggregated="Supported",
             entity=entity, attribute=attr))
 
-        # K2: split across two sentences. Each alone is insufficient; the pair supports.
+        # K2: split across two sentences.
+        # K2a -- the value-bearing sentence ALONE. The subject is only implied ("the survey"),
+        #        so it cannot support the claim about this entity. This is the hard negative.
+        rows.append(SynthRow(
+            kind="K2_split_support", claim=claim,
+            evidence=[f"The survey reported a {attr} of {vp}."],
+            span_labels=["insufficient"],
+            verdict_if_aggregated="Not Enough Evidence",
+            entity=entity, attribute=attr))
+        # K2b -- the joined pair. Together they establish the fact, so the correct verdict IS
+        #        Supported. An earlier version labelled the pair "Not Enough Evidence" on the
+        #        theory that composition needed something extra; that was a LABEL ERROR. Two
+        #        sentences which jointly establish the fact support it. The checker was right
+        #        and the corpus was wrong.
         rows.append(SynthRow(
             kind="K2_split_support", claim=claim,
             evidence=[f"{entity.capitalize()} was surveyed in 2019.",
                       f"The survey reported a {attr} of {vp}."],
             span_labels=["insufficient", "insufficient"],
-            verdict_if_aggregated="Not Enough Evidence",
-            entity=entity, attribute=attr))
-        rows.append(SynthRow(
-            kind="K2_split_support", claim=claim,
-            evidence=[f"{entity.capitalize()} was surveyed in 2019.",
-                      f"The survey reported a {attr} of {vp}.",
-                      "The survey was independently reviewed."],
-            span_labels=["insufficient", "insufficient", "insufficient"],
             verdict_if_aggregated="Supported",
             entity=entity, attribute=attr))
 
@@ -233,16 +238,22 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] K2 emits both the insufficient and the supported "
           f"variant ({len(k2)} rows)")
 
-    pair_only = [r for r in k2 if len(r.evidence) == 2][0]
-    with_review = [r for r in k2 if len(r.evidence) == 3][0]
-    good = (pair_only.verdict_if_aggregated == "Not Enough Evidence"
-            and with_review.verdict_if_aggregated == "Supported")
+    single = [r for r in k2 if len(r.evidence) == 1][0]
+    pair = [r for r in k2 if len(r.evidence) == 2][0]
+    good = (single.verdict_if_aggregated == "Not Enough Evidence"
+            and pair.verdict_if_aggregated == "Supported")
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] K2 pair alone -> NEI, pair+review -> Supported "
-          f"(the hard negative exists)")
+    print(f"  [{'PASS' if good else 'FAIL'}] K2 value-sentence ALONE -> NEI "
+          f"(subject only implied), joined pair -> Supported")
+
+    # the pair's verdict is what the fact actually is: the two sentences jointly establish it
+    good = pair.span_labels == ["insufficient", "insufficient"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] neither K2 sentence is sufficient on its own, yet "
+          f"the pair is")
 
     # --- every individual sentence of K2 is insufficient on its own
-    good = all(lab == "insufficient" for r in k2 for lab in r.span_labels)
+    good = all(lab == "insufficient" for r in k2 for lab in r.span_labels)  # noqa: E501
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] no single K2 sentence is sufficient on its own")
 

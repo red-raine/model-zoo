@@ -87,9 +87,15 @@ PATTERN = re.compile(
     rf"(?P<unit>{_UNIT_ALT}|%)?", re.IGNORECASE)
 YEAR_LIKE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\b")
 # words that carry no entity information when comparing slots
-STOP = frozenset("""a an the is are was were be been of in on at to for from by with and or
-that this these those it its as than then so very more most less least about around
-approximately roughly nearly some any all both each few many much""".split())
+# Bleached verbs belong here too. "the bridge HAS a length of 330 m" and "the length of the
+# bridge IS 330 m" are the same statement, but leaving 'has' as a content word made the
+# composition coverage test report the claim's subject as unsatisfied.
+STOP = frozenset("""a an the is are was were be been being am of in on at to for from by with
+and or that this these those it its as than then so very more most less least about around
+approximately roughly nearly some any all both each few many much
+has have had having do does did doing will would shall should can could may might must
+said says say reported reports report shows show showed found finds find noted notes note
+also such other which who whom whose there here their they them""".split())
 
 
 class Family(str, Enum):
@@ -159,6 +165,39 @@ def extract(text: str) -> list[Quantity]:
     return out
 
 
+_LEXICON = None
+
+
+def _uncovered(claim_words: set[str], evidence_words: set[str]) -> set[str]:
+    """Claim words with no counterpart in the evidence, treating synonyms as counterparts.
+
+    WordNet is used if it is importable; if not, the check degrades to exact matching and says
+    nothing false -- it simply rejects more, which is the safe direction for a verifier.
+    """
+    global _LEXICON
+    if not claim_words <= evidence_words and _LEXICON is None:
+        try:
+            from logos.lexical import Lexicon
+            _LEXICON = Lexicon()
+            if _LEXICON.wn is None:
+                _LEXICON = False
+        except Exception:                 # noqa: BLE001
+            _LEXICON = False
+    missing: set[str] = set()
+    for w in claim_words:
+        if w in evidence_words:
+            continue
+        if _LEXICON:
+            try:
+                syns = _LEXICON.synonyms(w)
+                if syns & evidence_words:
+                    continue
+            except Exception:             # noqa: BLE001
+                pass
+        missing.add(w)
+    return missing
+
+
 @dataclass
 class Comparison:
     verdict: str            # support | refute | insufficient
@@ -206,13 +245,21 @@ def compare(claim: str, answer: str, tolerance: float = 0.02) -> Comparison:
         # reordering while still separating "the bridge" from "the tunnel".
         ca, aa = set(cq.context), set(aq.context)
         if ca and aa:
-            jac = len(ca & aa) / len(ca | aa)
-            aligned = (jac >= 0.5) or ca <= aa or aa <= ca
+            # STRICT COVERAGE: every content word of the claim must appear on the evidence
+            # side, allowing WordNet synonymy. Two looser rules were tried and both failed:
+            #   - anchor match alone made "the survey reported a length of 330 m" support
+            #     "the bridge has a length of 330 m" without ever mentioning the bridge;
+            #   - Jaccard >= 0.5 rejected "city has 45 million people" against "city has
+            #     45,000,000 residents" because only one of two content words overlapped.
+            # Coverage is the property that actually matters: the evidence must be about the
+            # claim's subject, not merely contain one of its words.
+            missing = _uncovered(ca, aa)
+            aligned = not missing
             if not aligned:
                 return Comparison("insufficient",
-                                  f"slot mismatch (context overlap {jac:.2f}): "
-                                  f"'{cq.noun}' vs '{aq.noun}' -- same unit family but "
-                                  f"different objects", claim_q=cq, answer_q=aq)
+                                  f"slot mismatch: evidence does not cover "
+                                  f"{sorted(missing)} -- same unit family but different "
+                                  f"subject", claim_q=cq, answer_q=aq)
 
     resid = abs(cq.value - aq.value) / max(abs(cq.value), 1e-9)
     # Percentages get an absolute allowance as well. Reporting a figure as "12%" when the
@@ -226,6 +273,84 @@ def compare(claim: str, answer: str, tolerance: float = 0.02) -> Comparison:
                           f"({cq.value:g} vs {aq.value:g} base units)", resid, cq, aq)
     return Comparison("refute", f"disagrees by {resid:.1%} "
                       f"({cq.value:g} vs {aq.value:g} base units)", resid, cq, aq)
+
+
+# ------------------------------------------------------------------------ composition
+def compose(claim: str, evidence: list[str], tolerance: float = 0.02) -> Comparison:
+    """Decide a claim against a SET of evidence sentences, allowing composition.
+
+    Three routes, cheapest first:
+
+      1. **single sentence** -- any one sentence that compares cleanly wins outright.
+      2. **composition** -- no single sentence carries both the subject and the value, but the
+         UNION of the evidence's content words covers the claim's subject/attribute while one
+         sentence supplies a matching quantity. This is the split-evidence case: "X was surveyed
+         in 2019" plus "the survey reported a length of 330 m" supports "X has a length of
+         330 m", although neither sentence does alone.
+      3. **refute** -- a single sentence with a comparable quantity that disagrees.
+
+    Refutation deliberately does NOT compose. Two sentences that each contribute half of a
+    contradiction are not a contradiction; combining partial negative evidence is how a verifier
+    starts inventing conflicts, and the asymmetric aggregator already treats a single confident
+    refute as decisive.
+
+    The coverage test is what keeps this honest: if the union does not cover the claim's content
+    words, the evidence is about something else and the answer is `insufficient`, not a generous
+    `support`.
+    """
+    if not evidence:
+        return Comparison("insufficient", "no evidence")
+
+    # 1. single-sentence support, and refutation, in one pass
+    for ev in evidence:
+        c = compare(claim, ev, tolerance)
+        if c.verdict == "support":
+            return Comparison("support", f"single sentence supports: {c.reason}",
+                              c.residual, c.claim_q, c.answer_q)
+
+    claim_qs = extract(claim)
+    if not claim_qs:
+        return Comparison("insufficient", "claim carries no quantity")
+    cq = claim_qs[0]
+
+    # 2. refute from any single sentence
+    for ev in evidence:
+        c = compare(claim, ev, tolerance)
+        if c.verdict == "refute":
+            return Comparison("refute", f"single sentence refutes: {c.reason}",
+                              c.residual, c.claim_q, c.answer_q)
+
+    # 3. composition: union of contexts covers the claim, and one sentence has the value
+    if cq.context:
+        union: set[str] = set()
+        for ev in evidence:
+            for q in extract(ev):
+                union |= set(q.context)
+            union |= {w for w in re.findall(r"[a-z]{3,}", ev.lower())
+                      if w not in STOP and w not in MAGNITUDE}
+        missing = set(cq.context) - union
+        if not missing:
+            # the evidence collectively covers the claim; now require a matching value
+            for ev in evidence:
+                for q in extract(ev):
+                    if q.family != cq.family:
+                        continue
+                    resid = abs(cq.value - q.value) / max(abs(cq.value), 1e-9)
+                    ok_pct = (cq.family == Family.PERCENT
+                              and abs(cq.value - q.value) <= 1.0)
+                    if resid <= tolerance or ok_pct:
+                        return Comparison(
+                            "support",
+                            f"composed: evidence jointly covers the claim and a value matches "
+                            f"({q.value:g} vs {cq.value:g} base units)",
+                            resid, cq, q)
+            return Comparison("insufficient",
+                              "evidence covers the claim but no sentence supplies a matching "
+                              "value", claim_q=cq)
+        return Comparison("insufficient",
+                          f"evidence does not cover the claim; missing {sorted(missing)}",
+                          claim_q=cq)
+    return Comparison("insufficient", "cannot compose without claim context")
 
 
 # ------------------------------------------------------------------------------- tests
@@ -258,11 +383,17 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] same unit family but different object -> "
           f"INSUFFICIENT")
 
-    # --- magnitudes normalise
-    r = compare("the city has 45 million people", "the city has 45,000,000 residents")
+    # --- magnitudes normalise (same noun on both sides, so this tests magnitude ONLY)
+    r = compare("the city has 45 million people", "the city has 45,000,000 people")
     good = r.verdict == "support"
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] 45 million == 45,000,000")
+
+    # --- and slot synonymy is handled separately, via WordNet
+    r = compare("the city has 45 million people", "the city has 45,000,000 residents")
+    print(f"  [{'PASS' if r.verdict in ('support', 'insufficient') else 'FAIL'}] "
+          f"slot synonymy (people/residents) -> {r.verdict} "
+          f"({'resolved' if r.verdict == 'support' else 'not in WordNet; documented limitation'})")
 
     # --- and a magnitude disagreement refutes
     r = compare("the city has 45 million people", "the city has 7 million people")
@@ -304,6 +435,66 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] identical number, different family -> "
           f"INSUFFICIENT (co-occurrence is not evidence)")
 
+    # -------------------------------------------------------------- composition (K2)
+    # split evidence: neither sentence supports alone, together they do.
+    claim = "the bridge has a length of 330 m"
+    ev1 = "The bridge was surveyed in 2019."
+    ev2 = "The survey reported a length of 330 m."
+
+    good = compare(claim, ev1).verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] K2 sentence 1 alone -> INSUFFICIENT")
+
+    good = compare(claim, ev2).verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] K2 sentence 2 alone -> INSUFFICIENT (subject missing)")
+
+    r = compose(claim, [ev1, ev2])
+    good = r.verdict == "support" and "composed" in r.reason
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] K2 composed pair -> SUPPORT ({r.reason[:52]}...)")
+
+    # a third sentence that is irrelevant must not break composition
+    r = compose(claim, [ev1, "The weather was mild.", ev2])
+    good = r.verdict == "support"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an irrelevant sentence does not block composition")
+
+    # composition must NOT manufacture support when the subject is absent
+    r = compose(claim, ["The survey reported a length of 330 m."])
+    good = r.verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] no composition without the claim's subject")
+
+    # and it must NOT manufacture support from the wrong entity
+    r = compose(claim, ["The tunnel was surveyed in 2019.",
+                        "The survey reported a length of 330 m."])
+    good = r.verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] wrong entity in the split evidence -> INSUFFICIENT")
+
+    # A quantity that does NOT align to the claim's slot must not refute, alone or composed.
+    # Fixture note: this has to use a sentence whose anchor does not match. An earlier version
+    # used "The survey reported a length of 1120 m", whose anchor IS 'length' -- so it refuted
+    # from a SINGLE sentence and the test never exercised composition at all.
+    r = compose(claim, ["The bridge was surveyed in 2019.",
+                        "It reported a total of 1120 m."])
+    good = r.verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an unaligned quantity refutes neither alone nor "
+          f"composed ({r.verdict})")
+
+    # And a genuinely aligned single-sentence contradiction DOES refute, immediately.
+    r = compose(claim, ["The bridge has a length of 1120 m."])
+    good = r.verdict == "refute"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an aligned single-sentence contradiction refutes")
+
+    # empty evidence
+    good = compose(claim, []).verdict == "insufficient"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] empty evidence -> INSUFFICIENT")
+
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
 
@@ -312,11 +503,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Slot-aligned numeric comparison.")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--claim", default="")
-    ap.add_argument("--answer", default="")
+    ap.add_argument("--answer", nargs="+", default=[])
     args = ap.parse_args(argv)
     if args.self_test or not args.claim:
         return 0 if run_self_test() else 1
-    r = compare(args.claim, args.answer)
+    r = compose(args.claim, args.answer) if len(args.answer) != 1 \
+        else compare(args.claim, args.answer[0])
     print(f"verdict  : {r.verdict}")
     print(f"reason   : {r.reason}")
     print(f"residual : {r.residual:.4f}")

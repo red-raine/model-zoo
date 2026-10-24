@@ -106,3 +106,93 @@ ties it exactly. The constructed corpus has **no class above 60%**, so a constan
    checker fails, and that is the natural place for the first learned component.
 3. **Fit aggregate weights to measured per-rule consistency** instead of the hand-set
    `strong_weight=0.55`, since the earlier experiment showed the threshold decided the answer.
+
+
+---
+
+# Addendum — composition closes K2, and one label in the corpus was wrong
+
+## The corpus had a label error, and the checker was right
+
+The first version labelled the K2 pair ("the bridge was surveyed in 2019" + "the survey reported
+a length of 330 m") as **Not Enough Evidence**, on the theory that composition needed something
+extra beyond the pair.
+
+That was wrong. **Two sentences which jointly establish the fact do support it.** The correct
+hard negative is the value-bearing sentence **alone** — where the subject is only implied by
+"the survey" — not the joined pair. Fixed:
+
+| row | evidence | correct verdict |
+|---|---|---|
+| K2a | `"The survey reported a length of 330 m."` alone | **NEI** — subject only implied |
+| K2b | survey sentence **+** value sentence | **Supported** — jointly established |
+
+The lesson is the same one this project keeps relearning: when a checker disagrees with a label,
+check the label first.
+
+## `compose()` — three routes, one refusal
+
+`logos.logic.quantity.compose(claim, evidence)` decides a claim against a **set** of sentences:
+
+1. **single sentence** — any one sentence that compares cleanly wins outright
+2. **composition** — no single sentence carries both subject and value, but the union of the
+   evidence's content words covers the claim's context while one sentence supplies a matching value
+3. **refute** — a single sentence with a comparable quantity that disagrees
+
+**Refutation deliberately does not compose.** Two sentences that each contribute half of a
+contradiction are not a contradiction, and the asymmetric aggregator already treats one confident
+refute as decisive. Manufacturing conflicts from partial negative evidence is how a verifier
+starts inventing them.
+
+## Strict coverage replaced two looser rules, both of which failed
+
+The slot test went through three designs, each broken by a specific case:
+
+| rule | broke on |
+|---|---|
+| compare the two anchor nouns | `"the length of the bridge **is** 330"` vs `"the bridge **has** a length of 330"` — anchors `bridge` / `length`, same statement, false mismatch |
+| Jaccard ≥ 0.5 over content words | `"city has 45 million people"` vs `"city has 45,000,000 residents"` — only one of two content words overlaps |
+| anchor match **or** subset | `"the survey reported a length of 330 m"` alone supported a claim about the bridge, which the evidence never mentions |
+
+**Strict coverage** — every content word of the claim must appear on the evidence side, allowing
+WordNet synonymy — is the property that actually matters: the evidence must be *about* the
+claim's subject, not merely contain one of its words. All 21 tests pass under it.
+
+Documented limitation: `people` / `residents` are not WordNet synonyms, so that pair comes back
+`insufficient` rather than `support`. Reported openly rather than papered over with a looser rule.
+
+## The result
+
+| model | accuracy | margin over majority |
+|---|---|---|
+| majority (`NEI`, 30/60) | 0.500 | — |
+| **presence detector** | **0.483** | **−0.017** |
+| **slot-aligned + compose** | **1.000** | **+0.500** |
+
+Per-kind:
+
+| kind | presence | slot-aligned + compose |
+|---|---|---|
+| K1 easy support | 1.00 | **1.00** |
+| K2 split support | 0.50 | **1.00** |
+| K3 refute | 0.90 | **1.00** |
+| K4 wrong attribute | 0.00 | **1.00** |
+| K5 wrong entity | 0.00 | **1.00** |
+
+Every kind at 1.00, on a corpus where the presence baseline is *below* the majority and scores
+**0.00 on both trap kinds**.
+
+## What this is and is not
+
+**Is:** a deterministic span-level verifier that reaches 1.000 on a constructed, balanced corpus
+with five distinct reasoning demands, and whose honest failure mode is `insufficient` rather than
+a guess.
+
+**Is not:** evidence that this generalises to real claims. The corpus is 60 template rows over
+illustrative facts; the construction is a *design specimen* that proves the architecture and the
+label scheme work. Scaling it means sourcing facts with provenance, not writing more templates —
+and the temporal gate must run before any of it is used for training.
+
+The realistic next step is unchanged: source facts, keep the five kinds and the balance
+constraint, and treat any drop below 1.000 on real facts as the measure of how much the template
+phrasing was doing the work.
