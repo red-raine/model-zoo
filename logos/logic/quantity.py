@@ -111,6 +111,7 @@ class Quantity:
     unit: str
     noun: str              # nearest content word before the number
     span: tuple[int, int]
+    context: frozenset = frozenset()   # content words of the whole sentence
 
 
 def _content_noun(text: str, upto: int, width: int = 40) -> str:
@@ -147,9 +148,14 @@ def extract(text: str) -> list[Quantity]:
                 family = Family.YEAR
             elif mag:
                 family = Family.COUNT
+        # Magnitude words are NOT content: "45 million people" and "45,000,000 residents" are
+        # the same statement, but 'million' appears in only one context set and dragged the
+        # Jaccard overlap to 0.40, producing a false slot mismatch.
+        ctx_words = frozenset(w for w in re.findall(r"[a-z]{3,}", (text or "").lower())
+                               if w not in STOP and w not in MAGNITUDE)
         out.append(Quantity(raw=m.group(0).strip(), value=val, family=family,
                             unit=unit, noun=_content_noun(text, m.start()),
-                            span=(m.start(), m.end())))
+                            span=(m.start(), m.end()), context=ctx_words))
     return out
 
 
@@ -192,12 +198,21 @@ def compare(claim: str, answer: str, tolerance: float = 0.02) -> Comparison:
     # "unemployment fell by 12%" against "the figure dropped 12.5 percent", which are the same
     # statement.
     aq = same[0]
-    if cq.family != Family.PERCENT and cq.noun and aq.noun and cq.noun != aq.noun:
-        # allow one to be a substring of the other (bridge/bridges) but not unrelated
-        if not (cq.noun in aq.noun or aq.noun in cq.noun):
-            return Comparison("insufficient",
-                              f"slot mismatch: '{cq.noun}' vs '{aq.noun}' -- same unit family "
-                              f"but different objects", claim_q=cq, answer_q=aq)
+    if cq.family != Family.PERCENT:
+        # Slot alignment by CONTEXT OVERLAP. Comparing the two anchor nouns was positionally
+        # fragile: in "the length of the bridge IS 330" the nearest noun is 'bridge', while in
+        # "the bridge HAS a length of 330" it is 'length' -- the same statement scored a slot
+        # mismatch. Jaccard overlap over the sentence's content words is stable under that
+        # reordering while still separating "the bridge" from "the tunnel".
+        ca, aa = set(cq.context), set(aq.context)
+        if ca and aa:
+            jac = len(ca & aa) / len(ca | aa)
+            aligned = (jac >= 0.5) or ca <= aa or aa <= ca
+            if not aligned:
+                return Comparison("insufficient",
+                                  f"slot mismatch (context overlap {jac:.2f}): "
+                                  f"'{cq.noun}' vs '{aq.noun}' -- same unit family but "
+                                  f"different objects", claim_q=cq, answer_q=aq)
 
     resid = abs(cq.value - aq.value) / max(abs(cq.value), 1e-9)
     # Percentages get an absolute allowance as well. Reporting a figure as "12%" when the
