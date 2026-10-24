@@ -119,26 +119,41 @@ class Fact:
 
 
 def harvest(prop: str = "P2048", limit: int = 12, timeout: float = 60.0,
-            cls: str | None = "Q12280") -> list[Fact]:
+            cls: str | None = "Q12280", referenced_only: bool = False) -> list[Fact]:
     """Fetch facts for one property AND class, with provenance where Wikidata has it.
 
     `cls` is the Wikidata class of acceptable subjects (default bridge). Pass None to omit the
     constraint, which will produce junk -- see the CLASSES note.
+
+    `referenced_only=True` adds FILTER(BOUND(?refURL)), which is THE fix for the provenance gap.
+    Measured on an unfiltered harvest: 4 of 43 facts carried a reference URL, so 39 could never
+    receive an archive date and were rejected by the temporal gate. A date resolver dates
+    CITATIONS -- it cannot manufacture them. Filtering at harvest time trades volume for a corpus
+    where every fact can actually be dated, which is the only trade that helps a dated-claim
+    verifier.
     """
     if prop not in PROPERTIES:
         raise ValueError(f"unsupported property {prop}; known: {list(PROPERTIES)}")
     label, unit, family = PROPERTIES[prop]
     class_clause = f"?s wdt:P31/wdt:P279* wd:{cls} ." if cls else ""
-    q = f"""SELECT ?s ?sLabel ?v ?refURL ?retrieved ?pit WHERE {{
-  ?s wdt:{prop} ?v .
-  {class_clause}
-  ?s p:{prop} ?st .
-  OPTIONAL {{ ?st prov:wasDerivedFrom ?ref .
-             OPTIONAL {{ ?ref pr:P854 ?refURL . }}
-             OPTIONAL {{ ?ref pr:P813 ?retrieved . }} }}
-  OPTIONAL {{ ?st pq:P585 ?pit . }}
-  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-}} LIMIT {int(limit)}"""
+    # Token substitution, NOT str.format: SPARQL uses `{` and `}` for its own blocks, so
+    # .format() raises KeyError on the WHERE clause. Placeholders are __UPPER__ tokens.
+    q = """SELECT ?s ?sLabel ?v ?refURL ?retrieved ?pit WHERE {
+  ?s wdt:__PROP__ ?v .
+  __CLASS__
+  ?s p:__PROP__ ?st .
+  OPTIONAL { ?st prov:wasDerivedFrom ?ref .
+             OPTIONAL { ?ref pr:P854 ?refURL . }
+             OPTIONAL { ?ref pr:P813 ?retrieved . } }
+  OPTIONAL { ?st pq:P585 ?pit . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  __REF_FILTER__
+} LIMIT __LIMIT__"""
+    ref_filter = "FILTER(BOUND(?refURL))" if referenced_only else ""
+    q = (q.replace("__PROP__", prop)
+          .replace("__CLASS__", class_clause)
+          .replace("__REF_FILTER__", ref_filter)
+          .replace("__LIMIT__", str(int(limit))))
     url = SPARQL + "?query=" + urllib.parse.quote(q) + "&format=json"
     import time
     last: Exception | None = None
@@ -181,22 +196,44 @@ def harvest(prop: str = "P2048", limit: int = 12, timeout: float = 60.0,
     return out
 
 
-def temporal_gate(fact: Fact, claim_date: str) -> tuple[bool, str]:
+def temporal_gate(fact: Fact, claim_date: str,
+                  archive_first: str = "") -> tuple[bool, str]:
     """May this fact be used as evidence for a claim made on `claim_date`?
 
-    Rejects a fact whose source is dated AFTER the claim. Uses the *earliest* known date
-    (point-in-time, then retrieved-at) because the conservative direction is to reject.
-    A fact with no date at all is rejected for claim-dated use -- we cannot show it predates the
-    claim, and "unknown" is not a licence.
+    THE FIELD THAT WAS WRONG
+    ------------------------
+    The first version used `point_in_time or retrieved` as the fact's date. That conflates three
+    different things:
+
+      point_in_time (P585)   when the VALUE was measured -- the strongest evidence of existence
+      archive_first          earliest capture of the cited URL -- a lower bound on availability
+      retrieved (P813)       when a Wikidata EDITOR checked the source -- that is an UPPER bound on
+                             availability, and treating it as the fact's date is simply wrong
+
+    Measured on real facts: Hausmannsturm carries retrieved=2024-10-15 but its cited page was
+    captured by the Wayback Machine on 2019-07-21. The fact demonstrably existed in 2019. The old
+    gate rejected it for a 2022 claim because it read the editor's timestamp.
+
+    So precedence is established from the EARLIEST date that proves existence. A bare retrieval
+    date is NOT evidence of precedence and is rejected with a message that says so.
     """
     if not claim_date:
         return True, "no claim date; gate not applicable"
-    src = fact.point_in_time or fact.retrieved
-    if not src:
-        return False, "no source date; cannot establish precedence"
-    if src[:10] > claim_date[:10]:
-        return False, f"source dated {src[:10]} postdates claim {claim_date[:10]}"
-    return True, f"source {src[:10]} predates claim {claim_date[:10]}"
+
+    proof = [d for d in (fact.point_in_time, archive_first) if d]
+    if proof:
+        earliest = min(d[:10] for d in proof)
+        if earliest > claim_date[:10]:
+            return False, f"earliest evidence of existence {earliest} postdates claim " \
+                          f"{claim_date[:10]}"
+        which = "point-in-time" if fact.point_in_time and earliest == fact.point_in_time[:10] \
+            else "archive capture"
+        return True, f"earliest evidence {earliest} ({which}) predates claim {claim_date[:10]}"
+
+    if fact.retrieved:
+        return False, (f"only a retrieval date ({fact.retrieved[:10]}), which is when the source "
+                       f"was CHECKED, not when the fact existed; it cannot establish precedence")
+    return False, "no source date; cannot establish precedence"
 
 
 def save(facts: list[Fact], outdir: str) -> str:
@@ -260,17 +297,37 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] {withref}/4 facts carry a source URL "
           f"(the API does not always have one -- recorded as empty, not invented)")
 
-    # --- temporal gate: source before claim passes
+    # --- temporal gate: point-in-time before claim passes
     okk, why = temporal_gate(SYNTH_FACTS[0], "2020-06-01")
     good = okk and "predates" in why
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] source 2018 predates claim 2020 -> {okk}")
+    print(f"  [{'PASS' if good else 'FAIL'}] point-in-time 2018 predates claim 2020 -> {okk}")
 
-    # --- temporal gate: source AFTER claim is rejected. This is the AVeriTeC trap.
-    okk, why = temporal_gate(SYNTH_FACTS[2], "2020-06-01")
-    good = (not okk) and "postdates" in why
+    # --- an ARCHIVE capture can rescue a fact whose only Wikidata date is a late retrieval.
+    #     This is the Hausmannsturm case: retrieved 2024, captured 2019.
+    late_retrieval = Fact(qid="Q7", entity="the tower", attribute="height", value=40, unit="m",
+                          family="length", retrieved="2024-10-15",
+                          fetched_at="2026-10-24T00:00:00Z")
+    okk, why = temporal_gate(late_retrieval, "2022-01-01")
+    good = not okk and "CHECKED" in why
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] source 2024 postdates claim 2020 -> REJECTED")
+    print(f"  [{'PASS' if good else 'FAIL'}] a bare retrieval date cannot establish precedence")
+
+    okk, why = temporal_gate(late_retrieval, "2022-01-01", archive_first="2019-07-21")
+    good = okk and "archive capture" in why
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] archive capture 2019 RESCUES it for a 2022 claim")
+
+    # --- and a genuinely late fact is still rejected. This needs a POINT-IN-TIME date: a late
+    #     retrieval date takes the "cannot establish precedence" path above, which is a different
+    #     rejection for a different reason, and conflating them would hide which one fired.
+    genuinely_late = Fact(qid="Q8", entity="the hall", attribute="height", value=40, unit="m",
+                          family="length", point_in_time="2024-11-01",
+                          fetched_at="2026-10-24T00:00:00Z")
+    okk, why = temporal_gate(genuinely_late, "2020-06-01")
+    good = not okk and "postdates" in why
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] point-in-time 2024 postdates claim 2020 -> REJECTED")
 
     # --- no date at all: rejected for dated claims, because unknown is not a licence
     okk, why = temporal_gate(SYNTH_FACTS[3], "2020-06-01")
@@ -354,6 +411,8 @@ def main(argv=None) -> int:
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--harvest", type=int, default=0, metavar="N")
     ap.add_argument("--prop", default="P2048")
+    ap.add_argument("--referenced-only", action="store_true",
+                    help="harvest only statements that carry a reference URL (the provenance fix)")
     ap.add_argument("--out", default=r"B:\datasets\forge\facts")
     ap.add_argument("--show", action="store_true")
     args = ap.parse_args(argv)
@@ -365,7 +424,8 @@ def main(argv=None) -> int:
                           ("P2048", "Q12518"), ("P2048", "Q12323"),
                           ("P1082", "Q515")):
             try:
-                got = harvest(prop, args.harvest, cls=cls)
+                got = harvest(prop, args.harvest, cls=cls,
+                              referenced_only=args.referenced_only)
                 print(f"[facts] {prop}: {len(got)} facts, "
                       f"{sum(1 for f in got if f.ref_url)} with a reference URL")
                 allf += got
