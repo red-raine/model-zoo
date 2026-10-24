@@ -239,23 +239,56 @@ def magical_thinking(text: str) -> list[Finding]:
         citation="Rozin & Nemeroff 2002; Risen 2016, Psych. Review 123(2):182")]
 
 
+# A percentage that expresses a CHANGE is verifiable from its two endpoints and does NOT need
+# a population denominator. Measured on 400 real AVeriTeC dev claims: an earlier version of
+# this detector flagged "India's imports from China increased by 27%" as unevaluable, which is
+# a false positive -- you verify it by comparing the two import figures.
+_CHANGE_RATE = re.compile(
+    r"\b(?:increas\w*|decreas\w*|rose|rise|risen|fell|fall|fallen|grew|grow|grown|"
+    r"dropped?|climb\w*|declin\w*|expand\w*|shrank|shrunk|reduc\w*)\b"
+    r"[^.\d]{0,20}?\b\d+(?:\.\d+)?\s*(?:%|percent|per cent)", re.IGNORECASE)
+
+# A comparative risk statement with no stated base group is the genuinely unevaluable form:
+# "40% more likely", "twice as likely", "3x the risk".
+_COMPARATIVE_RISK = re.compile(
+    r"\b(?:twice|thrice|double|triple|\d+(?:\.\d+)?\s*(?:times|x))\s+as\s+"
+    r"(?:likely|many|much|often)"
+    r"|\b\d+(?:\.\d+)?\s*(?:%|percent|per cent)\s+(?:more|less|higher|lower)\s+"
+    r"(?:likely|risk|chance|often)", re.IGNORECASE)
+
+# A percentage that names its reference class ("99% of people") states a base and is evaluable.
+_NAMED_BASE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|percent|per cent)\s+of\s+(?:the\s+)?[a-z]",
+                         re.IGNORECASE)
+
+# An explicit comparison group IS the denominator. "as much as" / "as likely as" is the
+# same-turn comparison form and was missed: "Iran has stockpiled 10 times as much enriched
+# uranium AS it had in 2015" states its baseline explicitly and is verifiable.
+_COMPARISON = re.compile(
+    r"\b(?:compared (?:to|with)|versus|vs\.?|than)\b"
+    r"|\bas\s+(?:much|many|likely|often|high|low|large|small)\b[^.\d]{0,40}?\bas\b",
+    re.IGNORECASE)
+
+
 def missing_denominator(text: str) -> list[Finding]:
-    """L5: a rate or count with no stated base."""
-    has_count = re.search(r"\b\d[\d,]*\b", text) is not None
-    has_rate = re.search(r"\bpercent|per cent|%|\bout of\b|\brate\b|\bmore likely\b", text,
-                         re.IGNORECASE) is not None
-    has_base = re.search(r"\bout of\b|\bper\b|\bamong\b|\bof \d|\bin \d|\bbase\b|\bsample\b|"
-                         r"\bn\s*=", text, re.IGNORECASE) is not None
-    if not (has_count or has_rate) or has_base:
+    """L5: a COMPARATIVE RISK with no stated baseline group.
+
+    Deliberately narrow. The defect is not "a percentage appears without a denominator" -- a
+    change percentage and a percentage-of-population are both verifiable. The defect is a
+    *comparative risk* whose baseline is unstated, which is where survivorship and availability
+    errors actually live.
+    """
+    m = _COMPARATIVE_RISK.search(text)
+    if not m:
         return []
-    if not has_rate:
+    if _NAMED_BASE.search(text) or _CHANGE_RATE.search(text) or _COMPARISON.search(text):
         return []
     return [Finding(
         defect=Defect.SELECTION_DENOMINATOR, frame="base-rate / denominator absent",
-        severity=0.65, evidence=text[:120], voiding=True,
-        explanation=("A rate is asserted with no denominator and no sampling frame. "
-                     "'40% higher risk' is unevaluable without the base rate; survivorship and "
-                     "availability errors live exactly here. Report as unevaluable."),
+        severity=0.7, evidence=m.group(0), voiding=True,
+        explanation=("A comparative risk is asserted with no baseline group. '40% more likely' "
+                     "and 'twice as likely' are unevaluable without the base rate: the same "
+                     "absolute difference is large or trivial depending on it. Survivorship and "
+                     "availability errors live exactly here."),
         citation="Kahneman & Tversky 1973; Wald 1943; Bar-Hillel 1980")]
 
 
@@ -577,11 +610,32 @@ def run_self_test() -> bool:
     f = missing_denominator("Taking the supplement made people 40% more likely to recover")
     good = len(f) == 1 and f[0].voiding
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] absent denominator => VOIDING (unevaluable)")
+    print(f"  [{'PASS' if good else 'FAIL'}] comparative risk with no baseline => VOIDING")
 
-    good = missing_denominator("40% of 250 patients recovered, versus 28% of 250 controls") == []
+    good = missing_denominator("40% of patients recovered versus 28% of controls") == []
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] a rate WITH a denominator does NOT fire")
+    print(f"  [{'PASS' if good else 'FAIL'}] an explicit comparison group is a denominator "
+          f"-> does NOT fire")
+
+    # REGRESSION from 400 real AVeriTeC claims: a CHANGE percentage is verifiable from its two
+    # endpoints and must not be called unevaluable.
+    good = missing_denominator("India's imports from China increased by 27% in April-August "
+                               "2020") == []
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a CHANGE percentage does NOT fire "
+          f"(real-claim false positive, fixed)")
+
+    good = missing_denominator("99% of people recover from COVID-19") == []
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a percentage that NAMES its reference class "
+          f"does NOT fire")
+
+    # second real-claim false positive: "as much as" is a stated comparison group
+    good = missing_denominator("Iran has stockpiled 10 times as much enriched uranium as it "
+                               "had in 2015") == []
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 'as much as' counts as a stated baseline "
+          f"-> does NOT fire")
 
     # --- overclaim: qualifier above the warrant ceiling
     f = overclaim("A single anecdote proves that the drug always works")
