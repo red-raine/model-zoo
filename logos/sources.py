@@ -514,8 +514,23 @@ _S = [
     Source("icij_offshore", "ICIJ Offshore Leaks", "https://offshoreleaks.icij.org/",
            "investigative", "offshore entities and people, investigative record", True,
            "scrape", "ODbL"),
-    Source("searxng", "SearXNG (local)", "http://localhost:8080/search", "search",
-           "metasearch across engines, self-hosted", True, "api", "AGPL"),
+    Source("search_orchestrator", "search-orchestrator (local)", "http://localhost:8022/search",
+           "search", "PROBED 2026-10-25: POST /search returns real results with title/url/snippet/"
+           "rank/score. This is the actual search surface -- route engines through it instead of "
+           "hitting them directly", True, "api", "local"),
+    Source("stealth_browser", "stealth-browser (local)", "http://localhost:8080/",
+           "local_egress",
+           "PROBED: GET /health -> {'status':'ok','service':'stealth-browser'}. NOT a search "
+           "engine -- an earlier registry entry wrongly pointed 8080 at searxng", True, "http",
+           "local"),
+    Source("mubeng", "mubeng proxy rotator (local)", "http://localhost:8089/", "local_egress",
+           "PROBED: :8089 -> container `mubeng` (image search-stack-mubeng). It is a Go FORWARD "
+           "proxy rotator, so plain GETs return 500 and curl -x gets no tunnel -- likely an empty "
+           "or dead upstream pool. A SECOND proxy besides Squid :3128; compare them as separate "
+           "egress arms rather than assuming either works", True, "http", "MIT"),
+    # (searxng removed 2026-10-25: the entry pointed at localhost:8080, which is the stealth
+    #  browser. A wrong source entry inflates the catalogue exactly like a dead archive endpoint
+    #  counted as a backup, so it is deleted rather than annotated.)
 
     # ==================================================================================
     # Web-archive redundancy tier. PROBED from this host on 2026-10-24 against one URL;

@@ -1,7 +1,32 @@
 # `logos` — the reasoning + fact-checking SDK
 
-**Status:** v0.1 · core logic layer built and tested · lexicon + API layers scaffolded
+**Status:** v0.2 · **29 modules, all self-tests pass** · lexicon + API layers still scaffolded
 **Owner:** opencode · **Consumers:** mini-minion-0, model-zoo, trace-miner, any family app
+
+---
+
+## 0. Verify it yourself, in one command
+
+```bash
+python logos/run_all.py            # all 29 modules
+python logos/run_all.py --fast     # skip the 5 that touch the network (~9 min instead of ~20)
+python logos/run_all.py --only logic/   # one subtree
+```
+
+Every module is also an independent program: `python logos/logic/syllogism.py --self-test`.
+
+**What actually exists right now** — this table is the claim, and `run_all.py` is the proof:
+
+| layer | modules | what it does |
+|---|---|---|
+| **L3 logic** (9) | `syllogism` `propositional` `badframes` `lean_bridge` `lean_verify_all` `sorites` `channel` `argumentation` `quantity` | validity: 24/24 valid syllogisms reproduced over 256 forms; 35 inference + 16 replacement rules truth-table verified; 8 fallacies with concrete countermodels; **51/51 lemmas machine-proved in real Lean 4**, 8/8 fallacies machine-unprovable |
+| **reasoning core** (19) | `schema` `honesty` `pgm` `decision` `aggregate` `fusion` `abstain` `locator` `lexical` `datasets` `harness` `per_evidence_synth` `ontology` `facts` `sources` `redundancy` `router` `dating` `egress` | typing, exact variable elimination, cost-sensitive abstention, Mondrian conformal, log-linear pooling, provenance harvest, 3-tier dated redundancy, bandit source routing, dual-egress fetching |
+| **evidence** (1) | `verify/per_evidence` | five-kind constructed corpus K1–K5 |
+| **scaffolded** | `lexicon/` `frames/` `evidence/` `api/` | `__init__` only — declared as not-built in `honesty.py`, which checks that claim against disk |
+
+`honesty.py` is the layer that keeps the rest honest: every layer declares **what it proves and what
+it cannot**, and its self-test fails if a declared module stops existing on disk. That check exists
+because a capability manifest that rots silently is worse than no manifest.
 
 ---
 

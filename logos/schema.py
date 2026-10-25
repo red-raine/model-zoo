@@ -262,7 +262,52 @@ class Warrant(BaseModel):
         return self
 
 
-if __name__ == "__main__":  # tiny smoke test
+def run_self_test() -> bool:
+    print("logos.schema - SELF TEST")
+    ok = True
+
+    q1 = Quantity(value=1.2e6, unit="people", raw="1.2 million")
+    q2 = Quantity(value=1200000.0, unit="people", raw="1,200,000")
+    good = q1 == q2
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] quantity normalisation: '1.2 million' == "
+          f"'1,200,000'")
+
+    b = Belief(p_verdict_wrong=0.4, p_prior_mismatch=0.9, p_evidence_gap=0.95)
+    good = b.fishy > 0.99
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a belief wrong by all three routes is fishy "
+          f"({b.fishy:.4f} > 0.99)")
+
+    # --- a Warrant that abstains must record WHY. The validator that enforces this lives on
+    #     Warrant, not Belief -- my first version of this test passed `verdict=None` to Belief,
+    #     which pydantic silently ignored as an extra field, so the test "passed" for the wrong
+    #     reason. Testing the right class is the whole point.
+    try:
+        Warrant(claim_id="c1", verdict=None, notes=[])
+        good = False
+    except Exception:                                          # noqa: BLE001
+        good = True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a Warrant that abstains with no notes is rejected")
+
+    # --- and with a reason it is accepted, so the rule is not just "always fail"
+    try:
+        Warrant(claim_id="c2", verdict=None, notes=["retrieval returned nothing"])
+        good = True
+    except Exception:                                          # noqa: BLE001
+        good = False
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a Warrant that abstains WITH a reason is accepted")
+
+    print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
+    return ok
+
+
+if __name__ == "__main__":
+    import sys
+    if "--self-test" in sys.argv or len(sys.argv) == 1:
+        raise SystemExit(0 if run_self_test() else 1)
     q1 = Quantity(value=1.2e6, unit="people", raw="1.2 million")
     q2 = Quantity(value=1200000.0, unit="people", raw="1,200,000")
     assert q1 == q2, "quantity normalisation is broken"
