@@ -179,12 +179,41 @@ class Router:
 
 
 # ------------------------------------------------------------------------------- memory
+ABSENT = "\x00ABSENT"            # a remembered "we looked and found nothing" is a real answer
+
+
 @dataclass
 class Memo:
-    """Content-addressed memory for lookup results, with TTL and hit/miss stats."""
+    """Content-addressed memory for lookup results, with TTL and hit/miss stats.
+
+    AN UNUSABLE ANSWER IS NOT A RESULT
+    ----------------------------------
+    The first version cached whatever a lookup returned, including answers that failed the caller's
+    validator. Measured on a recorded 24-fact fixture (logos/ablate_memory.py):
+
+        memo + bandit, caching anything      12/24 gate-kept
+        memo + bandit, never caching junk    14/24
+        memo alone                           14/24
+        no memory at all                     14/24
+
+    Caching an unusable answer turned a one-off search mistake into a thirty-day error, and that is
+    why adding the second memory made the system WORSE THAN HAVING NEITHER. The two memories are not
+    independent: the memo amplifies the bandit's exploration mistakes into permanent belief.
+
+    So `remember` takes a `usable` flag and unusable entries get a SHORT ttl. The system still
+    remembers "I already looked and found nothing good" so it does not re-ask on every call, but it
+    retries soon, because a throttled archive is often fine an hour later.
+    """
 
     path: str = os.path.join(os.path.expanduser("~"), ".cache", "logos_memo.json")
     ttl_s: float = 60 * 60 * 24 * 30          # 30 days: facts do not change hourly
+    # 0 means an UNUSABLE answer is not cached at all. That looks wasteful and is deliberate: the
+    # memo and the bandit compete for the same improvement budget. The bandit learns only from
+    # trials, so caching "we already failed here" removes exactly the trials it needs. Measured on
+    # the fixture: caching failures left the pair at 12/24 while memory-free scored 14/24 -- the
+    # cache froze the learner before it could improve. The cost of not caching is k requests per
+    # undatable fact per session (2 of 48 here), which is the cheapest thing in this system.
+    retry_s: float = 0.0
     entries: dict = field(default_factory=dict)
     hits: int = 0
     misses: int = 0
@@ -203,23 +232,37 @@ class Memo:
     def key(task: str, query: str) -> str:
         return hashlib.sha1(f"{task}|{query}".encode("utf-8")).hexdigest()
 
-    def get(self, task: str, query: str):
-        """Return the remembered result, or None. A remembered None is a real answer."""
+    def get_entry(self, task: str, query: str) -> dict | None:
+        """{'value', 'usable'}, or None. Distinguishes a remembered ABSENT from a cold miss."""
         e = self.entries.get(self.key(task, query))
         if not e:
             self.misses += 1
             return None
+        ttl = self.ttl_s if e.get("usable", True) else e.get("ttl", self.retry_s)
         # '>=' not '>': a TTL of 0 must expire immediately, and '>' leaves a same-tick write
         # alive because the difference can be exactly 0.
-        if time.time() - e["at"] >= self.ttl_s:
+        if time.time() - e["at"] >= ttl:
             self.misses += 1
             return None
         self.hits += 1
-        return e["value"]
+        v = e["value"]
+        return {"value": None if v == ABSENT else v, "usable": bool(e.get("usable", True))}
 
-    def remember(self, task: str, query: str, value) -> None:
-        self.entries[self.key(task, query)] = {"value": value, "at": time.time(),
-                                               "task": task, "query": query[:200]}
+    def get(self, task: str, query: str):
+        """Backward-compatible accessor: the value, or None. A remembered ABSENT returns None."""
+        e = self.get_entry(task, query)
+        return None if e is None else e["value"]
+
+    def remember(self, task: str, query: str, value, usable: bool = True) -> None:
+        """Store a result. `usable=False` also shortens the ttl so the system retries soon."""
+        self.entries[self.key(task, query)] = {
+            "value": ABSENT if value is None else value,
+            "at": time.time(),
+            "usable": bool(usable),
+            "ttl": self.ttl_s if usable else self.retry_s,
+            "task": task,
+            "query": query[:200],
+        }
 
     def save(self) -> None:
         try:
@@ -253,11 +296,13 @@ def routed_lookup(router: Router, memo: Memo, context: str, query: str,
     Pass a validator. If you do not, the router learns to prefer sources that talk, not sources
     that are right, and it will get very good at that.
     """
-    cached = memo.get(context, query)
+    cached = memo.get_entry(context, query)
     if cached is not None:
-        return {"value": cached, "from": "memo", "tried": [], "hit": True}
+        return {"value": cached["value"], "from": "memo", "tried": [],
+                "hit": cached["value"] is not None, "usable": cached["usable"]}
 
     tried, value, winner = [], None, None
+    good = False                     # a source may never be tried at all; never leave this unbound
     for src in router.select(context, candidates, k=k):
         t0 = time.perf_counter()
         try:
@@ -291,9 +336,17 @@ def routed_lookup(router: Router, memo: Memo, context: str, query: str,
             break                              # stop early: the budget guard in action
 
     if value is not None:
-        memo.remember(context, query, value)
+        # remember whether it was USABLE, not merely present. Caching junk is how the memo made
+        # the two-memory system score 12/24 while memory-free scored 14/24.
+        memo.remember(context, query, value, usable=bool(usable is None or good))
+    else:
+        memo.remember(context, query, None, usable=False)   # remember the miss, retry on the short ttl
+
+    # `usable` is a statement about the ANSWER: nothing found is never usable, and with no validator
+    # supplied we can only say the answer exists, not that it is any good.
+    found_usable = bool(value is not None and (usable is None or good))
     return {"value": value, "from": winner or "none", "tried": tried,
-            "hit": value is not None}
+            "hit": value is not None, "usable": found_usable}
 
 
 # ------------------------------------------------------------------------------- tests
@@ -479,6 +532,65 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a post-claim answer does not stop the search; the "
           f"pre-claim route still wins ({r['value']})")
+
+    # --- THE ABLATION FINDING, AS A REGRESSION TEST: a cached UNUSABLE answer must not be served
+    #     as if it were fresh. Measured cost of the old behaviour: the two-memory configuration
+    #     scored 12/24 on a recorded fixture while NO MEMORY scored 14/24. Caching junk is worse
+    #     than having no cache, because it converts one bad search into a long-lived wrong belief.
+    tmp4 = tempfile.mkdtemp()
+    R9 = Router(state_path=os.path.join(tmp4, "r9.json"), seed=19)
+    M9 = Memo(path=os.path.join(tmp4, "m9.json"))
+
+    def junk_fetch(q, src):
+        return "JUNK"
+
+    r = routed_lookup(R9, M9, "date_resolution", "q-junk", ["a"], junk_fetch, k=1,
+                      usable=lambda v: v == "GOOD")
+    stored = [e for e in M9.entries.values() if e.get("usable") is False]
+    served = M9.get_entry("date_resolution", "q-junk")
+    good = r["usable"] is False and bool(stored) and served is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an unusable answer is stored as unusable and NOT "
+          f"served as a result")
+
+    # --- and it is not served at all on the next call, so the bandit still gets its trials
+    M10 = Memo(path=os.path.join(tmp4, "m10.json"), ttl_s=10_000_000)
+    M10.remember("t", "q", "JUNK", usable=False)
+    good = M10.get_entry("t", "q") is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an unusable entry is NOT served next call even when "
+          f"the normal ttl is huge -- the bandit keeps its trials")
+
+    # --- but a USABLE entry IS served, so the cache still does its job
+    M11 = Memo(path=os.path.join(tmp4, "m11.json"))
+    M11.remember("t", "ok", "2015-08-16", usable=True)
+    e = M11.get_entry("t", "ok")
+    good = e is not None and e["value"] == "2015-08-16" and e["usable"] is True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a usable entry is served normally")
+
+    # --- a cold miss returns None (the negative-cache semantics are opt-in via retry_s)
+    good = M11.get_entry("t", "never-seen") is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a cold miss returns None")
+
+    # --- nothing found is never "usable", even when no validator was supplied
+    r0 = routed_lookup(Router(state_path=os.path.join(tmp4, "r0b.json")),
+                       Memo(path=os.path.join(tmp4, "m0b.json")),
+                       "date_resolution", "q-empty", [], lambda q, s: None)
+    good = r0["value"] is None and r0["usable"] is False
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an empty candidate list returns unusable, no crash")
+
+    # --- a found answer with no validator is usable; a found answer failing the validator is not
+    R0 = Router(state_path=os.path.join(tmp4, "r0c.json"))
+    M0 = Memo(path=os.path.join(tmp4, "m0c.json"))
+    a = routed_lookup(R0, M0, "date_resolution", "q-noval", ["s"], lambda q, s: "X")
+    b = routed_lookup(R0, M0, "date_resolution", "q-val", ["s"], lambda q, s: "X",
+                      usable=lambda v: False)
+    good = a["usable"] is True and b["usable"] is False
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] usable follows the validator when one is supplied")
 
     # --- memo TTL expiry is honoured
     M2 = Memo(path=os.path.join(tmp, "m2.json"), ttl_s=0.0)

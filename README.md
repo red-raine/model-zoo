@@ -30,6 +30,11 @@ python logos/run_all.py --fast
 Root-level markdown is the lab notebook, in rough chronological order. The load-bearing ones:
 
 **Measured limits — read these before trusting anything**
+- `two-memory-ablation-memo-wins-bandit-does-not.md` — **the latest correction.** Ablated the two
+  memories against a *fixed-order memo* baseline (not the parallel quorum): the memo alone halves
+  requests (68 → 31) and loses nothing, the bandit alone costs **more** requests for no gain, and
+  **naive bandit+memo scores 12/24 while no memory scores 14/24**. Two memories are not independent:
+  a cache in front of a learner removes the feedback the learner needs
 - `redundancy-3x3-and-its-ceiling.md` — 3³ access paths built; **most facts have exactly one
   independent witness**, and that ceiling is a property of the web, not of the code
 - `egress-two-paths-and-the-squid-correction.md` — the proxy is **not** a universal fallback: it
