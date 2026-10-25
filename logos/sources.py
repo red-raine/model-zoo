@@ -474,7 +474,8 @@ _S = [
 
     # --- OSINT: archiving, geolocation, media forensics, metadata, infrastructure
     Source("ghostarchive", "Ghostarchive", "https://ghostarchive.org/", "osint",
-           "video archiving (YouTube and social clips)", True, "scrape", "public"),
+           "PROBED 2026-10-25: 200, keyless. Also a web-archive source (video/social clips survive "
+           "there after the origin dies)", True, "scrape", "public"),
     Source("suncalc", "SunCalc", "https://www.suncalc.org/", "osint",
            "shadow and sun-angle analysis (chronolocation)", False, "http", "free"),
     Source("sentinel_hub", "Sentinel Hub EO Browser", "https://apps.sentinel-hub.com/eo-browser/",
@@ -496,7 +497,8 @@ _S = [
     Source("crt_sh", "crt.sh", "https://crt.sh/", "osint",
            "certificate transparency logs", True, "api", "free"),
     Source("urlscan", "urlscan.io", "https://urlscan.io/api/", "osint",
-           "website scan context", True, "api", "free tier"),
+           "PROBED 2026-10-25: /api/v1/search is 200 keyless with real results. Our only "
+           "independent URL index that is NOT archive.org", True, "api", "public"),
     Source("icann_lookup", "ICANN Lookup", "https://lookup.icann.org/", "osint",
            "domain registration and ownership", True, "api", "public"),
 
@@ -550,6 +552,32 @@ _S = [
     Source("trove_archive", "Trove (NLA) web archive", "https://trove.nla.gov.au/",
            "web_archive", "PROBED 410 Gone on the API path tried; needs a key", True,
            "api-key", "mixed"),
+
+    # --- 2026-10-25 RE-PROBE. The first census said "3 of 15 work". That was wrong three ways: a
+    # timed-out `docker ps` made the proxy look down, transient failures were read as permanent, and
+    # a 429 was read as a DNS failure. Forced direct-vs-proxy probes give 9 answering, 6 gated, 4
+    # dead. The entries below are the ones the first pass missed entirely.
+    Source("wayback_available", "Wayback Availability API", "https://archive.org/wayback/available",
+           "web_archive", "PROBED WORKING: closest snapshot in ONE 246-byte JSON call. Far cheaper "
+           "than CDX and we had never used it -- use as a tier-0 probe", True, "api", "public"),
+    Source("urlscan_note", "urlscan.io (archive-index use)", "https://urlscan.io/api/v1/search/",
+           "web_archive", "See the osint entry `urlscan` -- same service, one id. Probed 2026-10-25: "
+           "200, keyless, real results. It is the only independent URL index we have that is NOT "
+           "archive.org, so it samples a different population of URLs rather than a second window on "
+           "the same crawl. Wired as a route in redundancy.py.", True, "api", "public"),
+    Source("conifer", "Conifer (Webrecorder)", "https://conifer.rhizome.org/", "web_archive",
+           "PROBED WORKING 200. Interactive session archives -- captures JS behaviour that static "
+           "crawlers lose", True, "scrape", "mixed"),
+    Source("archive_is", "archive.today / archive.is", "https://archive.is/", "web_archive",
+           "PROBED 429 direct AND via proxy: ALIVE and throttling, NOT dead. The earlier 'DNS does "
+           "not resolve' was transient. Needs the proxy path to reach", True, "scrape", "public"),
+    Source("archivebox", "ArchiveBox (self-hosted)", "https://archivebox.io/", "web_archive",
+           "NOT YET RUN. Software that makes US the archive instead of a client of one. The only "
+           "real fix for single-witness facts -- see knowledge/redundancy-3x3-and-its-ceiling.md",
+           False, "self-host", "MIT"),
+    Source("browsertrix", "Browsertrix (self-hosted crawler)", "https://webrecorder.net/browsertrix/",
+           "web_archive", "NOT YET RUN. Scheduled whole-site archiving with full JS fidelity; the "
+           "second-crawler strategy", False, "self-host", "AGPL"),
 ]
 
 REGISTRY: dict[str, Source] = {s.id: s for s in _S}
@@ -809,7 +837,7 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] ids unique and all URLs well formed")
 
     # access modes are constrained, so "scale" never silently means "scrape everything"
-    good = all(s.access in ("http", "api", "api-key", "scrape", "bulk", "dead")
+    good = all(s.access in ("http", "api", "api-key", "scrape", "bulk", "dead", "self-host")
                for s in REGISTRY.values())
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] every source declares an access mode")

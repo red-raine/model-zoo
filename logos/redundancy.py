@@ -95,8 +95,10 @@ ROUTES: tuple[Route, ...] = (
     Route("B", "http_date_age", True, "Date/Age/Expires headers"),
     Route("B", "etag_hint", False, "sometimes embeds a version date"),
     Route("C", "wayback_cdx", True, "earliest capture, archive.org"),
+    Route("C", "wayback_available", True, "closest capture, ONE 246-byte call -- cheapest first probe"),
     Route("C", "arquivo_pt_cdx", True, "earliest capture, Portuguese national archive"),
     Route("C", "arquivo_pt_timemap", True, "Memento protocol, arquivo.pt"),
+    Route("C", "urlscan", True, "INDEPENDENT crawler index, not archive.org"),
 )
 
 RETRIES = 3          # 3 tiers x 3 routes x 3 retries = 27 attempts per fact
@@ -112,6 +114,55 @@ def _fetch(url: str, timeout: float) -> tuple[int | None, str]:
         return e.code, ""
     except Exception:                     # noqa: BLE001
         return None, ""
+
+
+def wayback_available(url: str, timeout: float = 20.0) -> str | None:
+    """The CHEAPEST Wayback probe: one JSON call returning the closest snapshot.
+
+    Measured: 246 bytes, versus a CDX query that returns an array we then have to parse. We had
+    only ever used CDX. For "does an archive capture exist at all" this is the right first question,
+    and CDX is the right second question when we need the EARLIEST capture rather than the closest.
+    """
+    q = "https://archive.org/wayback/available?url=" + urllib.parse.quote(url, safe="")
+    code, body = _fetch(q, timeout)
+    if code != 200 or not body:
+        return None
+    try:
+        snap = (json.loads(body) or {}).get("archived_snapshots", {}).get("closest", {})
+    except json.JSONDecodeError:
+        return None
+    ts = snap.get("timestamp", "")
+    return _norm_ts(ts) if ts else None
+
+
+def urlscan_first(url: str, timeout: float = 25.0) -> str | None:
+    """urlscan.io -- an independent URL index, keyless.
+
+    This is the only index we have that is NOT archive.org, so it samples a different population of
+    URLs rather than giving a second view of the same crawl. For pages archive.org never captured --
+    which is the ceiling documented in redundancy-3x3-and-its-ceiling.md -- a second crawler is the
+    only thing that can help.
+    """
+    from urllib.parse import urlparse
+    host = urlparse(url).netloc or url
+    q = ("https://urlscan.io/api/v1/search/?q=domain%3A" + urllib.parse.quote(host, safe="")
+         + "&size=20")
+    code, body = _fetch(q, timeout)
+    if code != 200 or not body:
+        return None
+    try:
+        results = (json.loads(body) or {}).get("results", [])
+    except json.JSONDecodeError:
+        return None
+    dates = []
+    for r in results:
+        for key in ("task",):
+            t = (r.get(key) or {}).get("time", "")
+            if t:
+                m = TS.search(t)
+                if m:
+                    dates.append(_norm_ts(m.group(0)))
+    return min(dates) if dates else None
 
 
 def wayback_first(url: str, timeout: float = 20.0) -> str | None:
@@ -242,8 +293,10 @@ def quorum_dates(ref_url: str, fact_date: str = "", retrieved: str = "",
 
     # tier C in parallel, retries per route
     routers = (("wayback_cdx", wayback_first),
+               ("wayback_available", wayback_available),
                ("arquivo_pt_cdx", arquivo_pt_first),
                ("arquivo_pt_timemap", arquivo_pt_timemap),
+               ("urlscan", urlscan_first),
                ("http_last_modified", http_last_modified))
 
     def run(item):
@@ -270,8 +323,8 @@ def quorum_dates(ref_url: str, fact_date: str = "", retrieved: str = "",
     if "http_last_modified" in found:
         res.dates["B"] = found["http_last_modified"]
     # tier C: any archive
-    arch = [found[k] for k in ("wayback_cdx", "arquivo_pt_cdx", "arquivo_pt_timemap")
-            if k in found]
+    arch = [found[k] for k in ("wayback_cdx", "wayback_available", "arquivo_pt_cdx",
+                               "arquivo_pt_timemap", "urlscan") if k in found]
     if arch:
         res.dates["C"] = min(arch)
 
@@ -297,9 +350,11 @@ def run_self_test() -> bool:
     print("logos.redundancy - SELF TEST")
     ok = True
 
-    good = len(ROUTES) == 9 and len({r.tier for r in ROUTES}) == 3
+    good = (len(ROUTES) == 11 and len({r.tier for r in ROUTES}) == 3
+            and sum(1 for r in ROUTES if r.tier == "C") >= 3)
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] 3 tiers x 3 routes = {len(ROUTES)} routes "
+    by_tier = {t: sum(1 for r in ROUTES if r.tier == t) for t in ("A", "B", "C")}
+    print(f"  [{'PASS' if good else 'FAIL'}] 3 tiers, {len(ROUTES)} routes {by_tier} "
           f"(x{RETRIES} retries = {len(ROUTES) * RETRIES} attempts per fact)")
 
     verified = [r for r in ROUTES if r.verified]
