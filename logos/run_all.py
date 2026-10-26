@@ -48,6 +48,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("redundancy.py", True),               # live archive quorum
     ("router.py", False),
     ("dating.py", False),
+    ("arbiter.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
