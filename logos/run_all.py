@@ -49,6 +49,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("router.py", False),
     ("dating.py", False),
     ("arbiter.py", False),
+    ("calibrate.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
