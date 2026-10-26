@@ -1,0 +1,495 @@
+"""logos/verdict_tune.py — can a prior correction fix the over-predicted rare class?
+
+THE DIAGNOSIS
+-------------
+Measured on the deduped dev split, the NLI model reaches macro-F1 0.6688 (accuracy 0.8008) but:
+
+    class                    n  predicted   prec   rec     F1
+    REFUTED                303        306  0.879 0.888  0.883
+    SUPPORTED              107         93  0.892 0.776  0.830
+    NOT_ENOUGH_EVIDENCE     34         16  0.938 0.441  0.600
+    CONFLICTING             38         67  0.284 0.500  0.362
+
+CONFLICTING is predicted 67 times for 38 real rows: **29 false positives against 19 true positives**.
+That is not a knowledge failure, it is a decision-boundary failure -- the model's probabilities rank
+rows reasonably but the argmax is biased toward the rare-and-salient class.
+
+So before asking for more data (which the power analysis says would cost ~2,000 rows for this class),
+ask whether a threshold fix is enough. It is free, needs no training, and is tunable on data we
+already have.
+
+WHAT IS TESTED
+--------------
+    raw argmax                              the baseline to beat
+    prior correction  p_i / prior_i^tau     the standard fix for a biased class prior
+    temperature scaling                     fixes overconfidence, changes no argmax on its own
+    both                                    prior correction on temperature-scaled probabilities
+
+and the combination is reported on macro-F1, per-class F1, ECE and Brier.
+
+THE DISCIPLINE THAT MAKES THIS MEANINGFUL
+------------------------------------------
+`calib` (500 rows) is used ONLY to choose tau and the temperature. `dev` (500 rows, minus the 18 that
+duplicate train) is used ONLY to report. Tuning and reporting on the same rows would manufacture an
+improvement out of the freedom in tau -- and tau is a single continuous parameter that will happily
+absorb 500 rows of noise. If a tau chosen on calib does not help on dev, the answer is that it did not
+help.
+
+Also reported: **how much freedom tau has**. A metric that improves across a broad plateau is a real
+effect; one that improves only inside a narrow spike is a fitted accident, and the plateau width is the
+honest way to say so without a formal test.
+
+USAGE
+    python tools/logos/verdict_tune.py --self-test
+    python tools/logos/verdict_tune.py --run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+import numpy as np
+
+_TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+
+from logos.baseline import (CODE_TO_LABEL, DEV, TRAIN, label_of, macro_f1,  # noqa: E402
+                            mcnemar, per_class)
+from logos.calibrate import brier, ece  # noqa: E402
+from logos.eval_audit import _norm_claim, _shingles, load_jsonl  # noqa: E402
+
+D = r"B:\datasets\forge\verifier-av"
+LOGITS = os.path.join(D, "nli-post-logits.jsonl")
+EPS = 1e-12
+
+
+# ------------------------------------------------------------------------------- primitives
+def softmax(z: np.ndarray) -> np.ndarray:
+    z = z - z.max(axis=1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def apply_prior(probs: np.ndarray, priors: np.ndarray, tau: float) -> np.ndarray:
+    """p_i / prior_i^tau, renormalised. tau=0 is a no-op; tau=1 removes the prior entirely.
+
+    This is the standard correction for a classifier whose output distribution reflects a skewed
+    training prior. It moves the decision boundary without touching the ranking, which is exactly
+    what is wanted when the diagnosis is "over-predicted" rather than "cannot tell apart".
+    """
+    out = probs / np.power(np.clip(priors, EPS, None), tau)
+    return out / out.sum(axis=1, keepdims=True)
+
+
+def fit_temperature(z: np.ndarray, y: np.ndarray) -> float:
+    """Temperature minimising NLL by 1-D golden-section search on log T. Never touches argmax."""
+    def nll(t: float) -> float:
+        p = softmax(z / t)
+        return float(-np.mean(np.log(np.clip(p[np.arange(len(y)), y], EPS, None))))
+
+    lo, hi = np.log(0.25), np.log(8.0)
+    gr = (np.sqrt(5) - 1) / 2
+    for _ in range(80):
+        a = hi - gr * (hi - lo)
+        b = lo + gr * (hi - lo)
+        if nll(np.exp(a)) < nll(np.exp(b)):
+            hi = b
+        else:
+            lo = a
+    return float(np.exp((lo + hi) / 2))
+
+
+def fit_tau(z_calib: np.ndarray, y_calib: np.ndarray, priors: np.ndarray,
+            temp: float = 1.0, grid: np.ndarray | None = None) -> tuple[float, list]:
+    """Choose tau by macro-F1 on CALIB only. Returns (best_tau, full sweep for inspection)."""
+    grid = np.linspace(0.0, 2.0, 81) if grid is None else grid
+    p = softmax(z_calib / temp)
+    sweep = []
+    for t in grid:
+        pred = apply_prior(p, priors, float(t)).argmax(axis=1)
+        sweep.append((float(t), macro_f1(y_calib, pred, p.shape[1])))
+    best = max(sweep, key=lambda r: r[1])
+    return best[0], sweep
+
+
+def plateau(sweep: list, tol: float = 0.005) -> tuple[float, float, float]:
+    """Width of the tau range whose macro-F1 is within `tol` of the best.
+
+    A narrow plateau means the chosen tau is fitted noise; a wide one means the improvement is carried
+    by a genuine region of the parameter space. This is a stability diagnostic, not a p-value.
+    """
+    best_t = max(sweep, key=lambda r: r[1])[0]
+    best_v = max(r[1] for r in sweep)
+    ok = [t for t, v in sweep if v >= best_v - tol]
+    return best_t, min(ok), max(ok)
+
+
+def crossfit(z: np.ndarray, y: np.ndarray, priors: np.ndarray, folds: int = 5,
+             tau_grid: np.ndarray | None = None, seed: int = 0) -> dict:
+    """Choose tau and temperature OUT OF FOLD, then predict in fold.
+
+    Why this and not a single tuning split: the `calib` split in this dataset is 496/500 rows inside
+    TRAIN, so it cannot tune anything -- fitting on it is fitting on seen data, which is exactly why
+    the first attempt collapsed to tau=0 with a flat plateau. The only uncontaminated rows are in dev,
+    so dev has to serve both roles, and the honest way to do that is k-fold: every row is predicted by
+    a correction fitted without it.
+
+    `raw argmax` needs no fitting, so its cross-fitted score equals its full score. That asymmetry is
+    the point -- the corrected variant pays for its freedom and the baseline does not.
+    """
+    k = z.shape[1]
+    tau_grid = np.linspace(0.0, 2.0, 41) if tau_grid is None else tau_grid
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(y))
+    chunks = np.array_split(idx, folds)
+
+    raw_pred = softmax(z).argmax(axis=1)
+    corr_pred = np.empty(len(y), dtype=int)
+    temp_pred = np.empty(len(y), dtype=int)
+    temp_probs = np.empty((len(y), k))
+    chosen = []
+
+    for f in range(folds):
+        te = chunks[f]
+        tr = np.concatenate([chunks[g] for g in range(folds) if g != f])
+        t = fit_temperature(z[tr], y[tr])
+        tau, _ = fit_tau(z[tr], y[tr], priors, temp=1.0, grid=tau_grid)
+        chosen.append((tau, t))
+        corr_pred[te] = apply_prior(softmax(z[te]), priors, tau).argmax(axis=1)
+        temp_probs[te] = softmax(z[te] / t)
+        temp_pred[te] = temp_probs[te].argmax(axis=1)
+
+    onehot = np.eye(k)[y]
+    return {
+        "n": len(y), "folds": folds,
+        "macro_f1_raw": macro_f1(y, raw_pred, k),
+        "macro_f1_corrected": macro_f1(y, corr_pred, k),
+        "acc_raw": float(np.mean(raw_pred == y)),
+        "acc_corrected": float(np.mean(corr_pred == y)),
+        "argmax_changed": int(np.sum(corr_pred != raw_pred)),
+        "ece_raw": ece(softmax(z).ravel(), onehot.ravel(), 10),
+        "ece_temp": ece(temp_probs.ravel(), onehot.ravel(), 10),
+        "brier_raw": float(np.mean((softmax(z) - onehot) ** 2)),
+        "brier_temp": float(np.mean((temp_probs - onehot) ** 2)),
+        "chosen": chosen,
+        "mc": mcnemar(y, corr_pred, raw_pred),
+        "raw_pred": raw_pred, "corr_pred": corr_pred, "temp_pred": temp_pred,
+    }
+
+
+def crossfit_classweight(z: np.ndarray, y: np.ndarray, target: int, folds: int = 5,
+                         grid: np.ndarray | None = None, seed: int = 0) -> dict:
+    """Tune ONE multiplicative weight for one class, out of fold, and see if macro-F1 moves.
+
+    This is a different family from prior rescaling. Prior correction divides by a *shared* prior
+    vector, which is a global reparametrisation; this multiplies a *single* class's score, which moves
+    only that class's boundary. If prior correction is neutral because the model is confident rather
+    than mis-ranked, a boundary move is the thing that could still help -- so it is worth one
+    parameter, and only one, because 386 tuning rows cannot support more.
+
+    Both directions are searched: w<1 suppresses the class (raising precision, lowering recall) and
+    w>1 boosts it. Since CONFLICTING precision is 0.284 against recall 0.500, suppression is the
+    direction that should raise F1 -- but that is a prediction, not a result.
+    """
+    k = z.shape[1]
+    grid = np.linspace(0.05, 3.0, 60) if grid is None else grid
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(y))
+    chunks = np.array_split(idx, folds)
+
+    base_pred = softmax(z).argmax(axis=1)
+    tuned_pred = np.empty(len(y), dtype=int)
+    chosen = []
+    for f in range(folds):
+        te = chunks[f]
+        tr = np.concatenate([chunks[g] for g in range(folds) if g != f])
+        p_tr = softmax(z[tr])
+        best_w, best_v = 1.0, -1.0
+        for w in grid:
+            wv = np.ones(k)
+            wv[target] = w
+            pred = (p_tr * wv).argmax(axis=1)
+            v = macro_f1(y[tr], pred, k)
+            if v > best_v:
+                best_w, best_v = float(w), v
+        chosen.append(best_w)
+        wv = np.ones(k)
+        wv[target] = best_w
+        tuned_pred[te] = (softmax(z[te]) * wv).argmax(axis=1)
+
+    return {
+        "target": target, "n": len(y), "folds": folds,
+        "macro_f1_raw": macro_f1(y, base_pred, k),
+        "macro_f1_tuned": macro_f1(y, tuned_pred, k),
+        "weights": chosen,
+        "spread": float(max(chosen) - min(chosen)),
+        "changed": int(np.sum(tuned_pred != base_pred)),
+        "mc": mcnemar(y, tuned_pred, base_pred),
+        "per_class_raw": per_class(y, base_pred, k),
+        "per_class_tuned": per_class(y, tuned_pred, k),
+        "tuned_pred": tuned_pred, "raw_pred": base_pred,
+    }
+
+
+# ---------------------------------------------------------------------------------- driver
+def run(logits_path: str = LOGITS) -> int:
+    rows = [json.loads(ln) for ln in open(logits_path, encoding="utf-8") if ln.strip()]
+    Z = np.array([r["logits"] for r in rows], dtype=float)
+    y = np.array([r["label"] for r in rows])
+    split = np.array([r["split"] for r in rows])
+    k = Z.shape[1]
+
+    # --- label mapping recovered from the FIT split, not assumed from an ordering
+    fit_y = y[split == "fit"]
+    fit_counts = np.bincount(fit_y, minlength=k)
+    priors_train = fit_counts / fit_counts.sum()
+    print("=== recovered encoding (fit split) ===")
+    for c in range(k):
+        print(f"  {c} -> {label_of(c):22s} n={fit_counts[c]:5d}  prior={priors_train[c]:.3f}")
+
+    # --- dev dedup mask, aligned to the logits row order
+    train_rows = load_jsonl(TRAIN)
+    dev_rows = load_jsonl(DEV)
+    trk = {_norm_claim(r.get("claim", "")) for r in train_rows}
+    trs = set()
+    for r in train_rows:
+        trs |= _shingles(r.get("claim", ""), 13)
+
+    def is_dup(claim: str) -> bool:
+        kk = _norm_claim(claim)
+        sh = _shingles(claim, 13)
+        return kk in trk or (sh and bool(sh & trs))
+
+    dev_idx = np.where(split == "dev")[0]
+    cal_idx = np.where(split == "calib")[0]
+    keep = np.array([not is_dup(rows[i]["text"].split(" [SEP] ")[0]) for i in dev_idx])
+    print(f"\ncalib n={len(cal_idx)} (tuning only)   dev n={len(dev_idx)} "
+          f"(reporting only, {int((~keep).sum())} deduped)")
+
+    # --- check calib does not overlap train or dev, or tuning leaks into reporting
+    cal_claims = {_norm_claim(rows[i]["text"].split(" [SEP] ")[0]) for i in cal_idx}
+    dev_claims = {_norm_claim(rows[i]["text"].split(" [SEP] ")[0]) for i in dev_idx}
+    ovl = cal_claims & dev_claims
+    tr_ovl = cal_claims & trk
+    print(f"  calib/dev claim overlap: {len(ovl)}   calib/train overlap: {len(tr_ovl)}"
+          + ("   <- TUNING WOULD LEAK" if (ovl or tr_ovl) else "   (clean)"))
+
+    zc, yc = Z[cal_idx], y[cal_idx]
+    zd, yd = Z[dev_idx][keep], y[dev_idx][keep]
+
+    temp = fit_temperature(zc, yc)
+    tau, sweep = fit_tau(zc, yc, priors_train, temp=1.0)
+    best_t, lo_t, hi_t = plateau(sweep)
+    print(f"\n=== fitted on calib only ===")
+    print(f"  temperature T = {temp:.3f}   (1.0 = already calibrated)")
+    print(f"  prior-correction tau = {tau:.3f}   (0 = no correction, 1 = remove the train prior)")
+    print(f"  macro-F1 plateau within 0.005 of best: tau in [{lo_t:.2f}, {hi_t:.2f}] "
+          f"(width {hi_t - lo_t:.2f})")
+
+    # --- evaluate every variant on DEV, which was never used to choose anything
+    variants = {
+        "raw argmax": softmax(zd),
+        "temperature only": softmax(zd / temp),
+        f"prior tau={tau:.2f}": apply_prior(softmax(zd), priors_train, tau),
+        f"temp + prior tau={tau:.2f}": apply_prior(softmax(zd / temp), priors_train, tau),
+    }
+    print(f"\n=== on DEDUPED DEV (never used for tuning), n={len(yd)} ===")
+    print(f"  {'variant':26s} {'macroF1':>8s} {'acc':>6s} {'ECE':>6s} {'Brier':>7s}")
+    results = {}
+    for name, p in variants.items():
+        pred = p.argmax(axis=1)
+        mf = macro_f1(yd, pred, k)
+        acc = float(np.mean(pred == yd))
+        onehot = np.eye(k)[yd]
+        results[name] = {"pred": pred, "macro_f1": mf, "acc": acc,
+                         "ece": ece(p.ravel(), onehot.ravel(), 10),
+                         "brier": float(np.mean((p - onehot) ** 2))}
+        print(f"  {name:26s} {mf:8.4f} {acc:6.4f} {results[name]['ece']:6.4f} "
+              f"{results[name]['brier']:7.4f}")
+
+    base = results["raw argmax"]
+    tuned_name = f"prior tau={tau:.2f}"
+    tuned = results[tuned_name]
+    print(f"\n=== did the correction actually help? ===")
+    print(f"  macro-F1 {base['macro_f1']:.4f} -> {tuned['macro_f1']:.4f} "
+          f"({tuned['macro_f1'] - base['macro_f1']:+.4f})")
+    mc = mcnemar(yd, tuned["pred"], base["pred"])
+    print(f"  McNemar: {mc['b']} rows fixed, {mc['c']} rows broken, p={mc['p']:.4f}")
+    print(f"  accuracy {base['acc']:.4f} -> {tuned['acc']:.4f} "
+          f"({tuned['acc'] - base['acc']:+.4f})")
+
+    print(f"\n=== per-class, deduped dev ===")
+    print(f"  {'class':22s} {'raw F1':>7s} {'tuned F1':>9s} {'raw pred':>9s} {'tuned pred':>11s}")
+    raw_pc = per_class(yd, base["pred"], k)
+    tun_pc = per_class(yd, tuned["pred"], k)
+    for a, b in zip(raw_pc, tun_pc):
+        print(f"  {label_of(a['class']):22s} {a['f1']:7.3f} {b['f1']:9.3f} "
+              f"{a['predicted']:9d} {b['predicted']:11d}")
+
+    verdict = ("HELPS" if tuned["macro_f1"] > base["macro_f1"] + 0.005 else
+               "DOES NOT HELP" if tuned["macro_f1"] < base["macro_f1"] - 0.005 else "NEUTRAL")
+    print(f"\n=== verdict on the leaking tuning split: prior correction {verdict} ===")
+
+    # --- THE HONEST VERSION. The calib split is 496/500 inside train, so nothing above can be
+    #     believed. Cross-fitting on dev is the only uncontaminated option: every row is predicted
+    #     by a correction fitted without it.
+    print(f"\n{'=' * 70}")
+    print(f"=== CROSS-FITTED on deduped dev (the only uncontaminated option) ===")
+    cf = crossfit(zd, yd, priors_train, folds=5)
+    print(f"  n={cf['n']}, {cf['folds']} folds, tau+T chosen out-of-fold each time")
+    print(f"    {'metric':22s} {'raw argmax':>12s} {'corrected':>12s}")
+    print(f"    {'macro-F1':22s} {cf['macro_f1_raw']:12.4f} {cf['macro_f1_corrected']:12.4f}")
+    print(f"    {'accuracy':22s} {cf['acc_raw']:12.4f} {cf['acc_corrected']:12.4f}")
+    print(f"  predictions changed: {cf['argmax_changed']}/{cf['n']}")
+    print(f"  McNemar: {cf['mc']['b']} fixed, {cf['mc']['c']} broken, p={cf['mc']['p']:.4f}")
+    print(f"\n  temperature only (never changes argmax, only confidence):")
+    print(f"    ECE   {cf['ece_raw']:.4f} -> {cf['ece_temp']:.4f}   "
+          f"({(cf['ece_temp'] - cf['ece_raw']) / cf['ece_raw']:+.0%})")
+    print(f"    Brier {cf['brier_raw']:.4f} -> {cf['brier_temp']:.4f}")
+    taus = [c[0] for c in cf["chosen"]]
+    temps = [c[1] for c in cf["chosen"]]
+    print(f"\n  tau chosen per fold : {[round(t, 2) for t in taus]}")
+    print(f"  T   chosen per fold : {[round(t, 2) for t in temps]}")
+    spread = max(taus) - min(taus)
+    print(f"  tau spread across folds: {spread:.2f}"
+          + ("   -> unstable, the parameter is fitting fold noise"
+             if spread > 0.5 else "   -> stable across folds"))
+
+    v2 = ("HELPS" if cf["macro_f1_corrected"] > cf["macro_f1_raw"] + 0.005 else
+          "DOES NOT HELP" if cf["macro_f1_corrected"] < cf["macro_f1_raw"] - 0.005 else "NEUTRAL")
+    print(f"\n=== CROSS-FITTED VERDICT: prior correction {v2} on macro-F1 ===")
+    print(f"  temperature scaling {'does' if cf['ece_temp'] < cf['ece_raw'] else 'does not'} "
+          f"improve calibration (ECE {cf['ece_raw']:.4f} -> {cf['ece_temp']:.4f})")
+
+    # --- the REMAINING cheap lever: a per-class boundary move, a different family from prior rescaling
+    print(f"\n{'=' * 70}")
+    print(f"=== per-class boundary move for each rare class (cross-fitted) ===")
+    for target, name in ((3, "CONFLICTING"), (2, "NOT_ENOUGH_EVIDENCE")):
+        cw = crossfit_classweight(zd, yd, target)
+        raw_pc = next(r for r in cw["per_class_raw"] if r["class"] == target)
+        tun_pc = next(r for r in cw["per_class_tuned"] if r["class"] == target)
+        print(f"\n  {name}  (w chosen per fold: {[round(w, 2) for w in cw['weights']]})")
+        print(f"    macro-F1 {cw['macro_f1_raw']:.4f} -> {cw['macro_f1_tuned']:.4f} "
+              f"({cw['macro_f1_tuned'] - cw['macro_f1_raw']:+.4f})   "
+              f"changed {cw['changed']}/{cw['n']}   McNemar p={cw['mc']['p']:.4f}")
+        print(f"    its own F1 {raw_pc['f1']:.3f} -> {tun_pc['f1']:.3f}   "
+              f"precision {raw_pc['precision']:.3f} -> {tun_pc['precision']:.3f}   "
+              f"recall {raw_pc['recall']:.3f} -> {tun_pc['recall']:.3f}   "
+              f"predicted {raw_pc['predicted']} -> {tun_pc['predicted']}")
+        print(f"    weight spread across folds {cw['spread']:.2f}"
+              + ("   -> unstable" if cw["spread"] > 1.0 else "   -> stable"))
+    return 0
+
+
+# --------------------------------------------------------------------------------- tests
+def run_self_test() -> bool:
+    print("logos.verdict_tune - SELF TEST")
+    ok = True
+    rng = np.random.default_rng(11)
+
+    # --- softmax is a proper distribution and shift-invariant
+    z = rng.normal(0, 2, (5, 4))
+    p = softmax(z)
+    good = np.allclose(p.sum(axis=1), 1) and np.allclose(softmax(z + 7.0), p)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] softmax normalises and is shift-invariant")
+
+    # --- tau=0 is a no-op; tau>0 downweights a large prior
+    pri = np.array([0.1, 0.2, 0.3, 0.4])
+    p0 = apply_prior(p, pri, 0.0)
+    good = np.allclose(p0, p)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] tau=0 is exactly the identity")
+
+    p1 = apply_prior(p, pri, 1.0)
+    # the largest-prior class must lose mass relative to a uniform-prior model
+    good = np.mean(p1[:, 3]) < np.mean(p[:, 3])
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] tau=1 reduces the mass of the largest-prior class "
+          f"({np.mean(p[:, 3]):.3f} -> {np.mean(p1[:, 3]):.3f})")
+
+    # --- temperature never changes the argmax
+    t = 3.7
+    good = np.array_equal(softmax(z).argmax(axis=1), softmax(z / t).argmax(axis=1))
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] temperature scaling cannot change a prediction "
+          f"(it only rescales confidence)")
+
+    # --- temperature recovers a known overconfidence. The labels MUST be drawn from softmax(z_true),
+    #     or 2.5 is not the right answer: with uniform labels the NLL-optimal temperature is a
+    #     different number entirely, and an assertion of 2.5 would be testing my premise rather than
+    #     the code.
+    z_true = rng.normal(0, 1, (4000, 4))
+    p_true = softmax(z_true)
+    y = np.array([rng.choice(4, p=row) for row in p_true])
+    z_over = z_true * 2.5                     # same ranking, overconfident
+    fitted = fit_temperature(z_over, y)
+    good = 2.2 < fitted < 2.8
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] temperature recovers a known 2.5x overconfidence "
+          f"(fit {fitted:.2f})")
+
+    # --- and temperature reduces NLL out of sample
+    nll_before = -np.mean(np.log(np.clip(softmax(z_over)[np.arange(4000), y], EPS, None)))
+    nll_after = -np.mean(np.log(np.clip(softmax(z_over / fitted)[np.arange(4000), y], EPS, None)))
+    good = nll_after < nll_before
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] and lowers NLL ({nll_before:.3f} -> {nll_after:.3f})")
+
+    # --- tau recovers a known prior bias: train on a skewed prior, evaluate on balanced data
+    k = 3
+    yc = np.array([0] * 700 + [1] * 200 + [2] * 100, dtype=int)
+    zc = rng.normal(0, 1, (len(yc), k))
+    zc[np.arange(len(yc)), yc] += 1.2
+    # inject the skew the correction should remove: class 0 gets an extra boost
+    zc[:, 0] += 1.6
+    priors_skewed = np.array([0.7, 0.2, 0.1])
+    tau_best, sweep = fit_tau(zc, yc, priors_skewed)
+    before = macro_f1(yc, softmax(zc).argmax(axis=1), k)
+    after = macro_f1(yc, apply_prior(softmax(zc), priors_skewed, tau_best).argmax(axis=1), k)
+    good = tau_best > 0.1 and after > before
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] tau finds and removes an injected class-0 boost "
+          f"(tau={tau_best:.2f}, macro-F1 {before:.3f} -> {after:.3f})")
+
+    # --- plateau reports a region, and is wide when the optimum is broad
+    bt, lo, hi = plateau(sweep)
+    good = lo <= bt <= hi
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] plateau brackets the chosen tau "
+          f"([{lo:.2f}, {hi:.2f}] contains {bt:.2f})")
+
+    # --- a constant sweep has a degenerate but valid plateau
+    flat = [(float(t), 0.5) for t in np.linspace(0, 2, 21)]
+    bt, lo, hi = plateau(flat)
+    good = abs(lo - 0.0) < 1e-9 and abs(hi - 2.0) < 1e-9
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a flat sweep reports the whole range, not a fake spike")
+
+    # --- label names come from the recovered mapping, not from CLASSES order
+    good = label_of(0) == "SUPPORTED" and label_of(3) == "CONFLICTING"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] label names use the recovered encoding")
+
+    print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
+    return ok
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Prior/temperature tuning for the verdict task.")
+    ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--run", action="store_true")
+    args = ap.parse_args(argv)
+    if args.self_test:
+        return 0 if run_self_test() else 1
+    if args.run:
+        return run()
+    return 0 if run_self_test() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

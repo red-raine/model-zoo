@@ -52,6 +52,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("calibrate.py", False),
     ("eval_audit.py", False),
     ("baseline.py", False),
+    ("verdict_tune.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
