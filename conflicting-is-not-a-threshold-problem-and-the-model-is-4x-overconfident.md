@@ -180,6 +180,71 @@ near a boundary.
    the scalar is fitted by two split protocols inside dev and confirmed by their agreement (4.23 vs
    4.23). A true external split requires new data, which is the same purchase as item 3.
 3. **Then** the stratified data for CONFLICTING and NEI -- now with two ruled-out alternatives behind it.
-4. **Feed the calibrated probabilities into `abstain.py` / `arbiter.py`.** They currently ingest raw
-   probabilities at ECE 0.098. Re-running risk-coverage at ECE 0.031 is the first downstream consumer of
-   this fix, and the real test of whether it mattered.
+4. **~~Feed the calibrated probabilities into abstention~~** — done, and it produced the sharpest
+   result of this cycle. See section 7: calibration is *harmful* for ranking-driven abstention and
+   *essential* for threshold-driven abstention.
+
+---
+
+## 7. Does calibration actually improve abstention? Two answers, one of them surprising
+
+I expected a simple yes. The measurement gives one **no** and one **enormous yes**, and the split
+matters.
+
+### 7a. I asserted an invariance theorem, and it was false
+
+My reasoning: temperature is a monotone transform, so it cannot change any ranking-based curve —
+risk-coverage and AURC must be exactly invariant. That is true **per row** (the argmax cannot change)
+and **false across rows**.
+
+$$
+p_i(T) = \frac{1}{1 + \sum_{j \neq i} e^{(z_j - z_i)/T}}
+$$
+
+Each row's max probability shrinks with `T` by an amount that depends on **that row's margin relative
+to its competitor spread**. Two rows can therefore swap order. Measured on 800 random rows at `T = 3.3`:
+**5.3% of row pairs reverse.**
+
+The test now pins the truth rather than the intuition, in three parts: ordering is *not* invariant;
+the argmax *is* invariant; and so risk-coverage *can* move.
+
+### 7b. Ranking-driven abstention: calibration makes it slightly worse
+
+```
+AURC          raw 0.074327   calibrated 0.079698   (+0.005371, WORSE)
+AURC excess   raw -0.124844  calibrated -0.119472  (negative = better than random)
+```
+
+**Do not claim a risk-coverage gain from calibration.** Here it costs 0.005 AURC. Both variants remain
+far better than random, but the claim "better calibration improves selective prediction" is simply not
+true when selection is by confidence rank.
+
+### 7c. Threshold-driven abstention: calibration is the difference between impossible and working
+
+Chow-style rule — pick the threshold that meets a 10% risk target on one half, apply it to the other:
+
+| | threshold | coverage | risk | target |
+|---|---|---|---|---|
+| **raw** (ECE 0.098) | 1.00 | **0.000** | — | **MISS** |
+| **raw** (ECE 0.098) | 1.00 | **0.000** | — | **MISS** |
+| **calibrated** (ECE 0.031) | 0.83 | **0.719** | 0.086 | OK |
+| **calibrated** (ECE 0.031) | 0.81 | **0.783** | 0.101 | MISS by 0.001 |
+
+**The raw model cannot configure abstention at all.** Its probabilities are so inflated that *no*
+threshold meets a 10% risk target on unseen rows, so coverage collapses to zero. After one scalar the
+same rule covers **72–78% of rows at ~10% risk**, hitting the target in one direction and missing by
+one part in a thousand in the other.
+
+That is the real value, and it is narrower and more concrete than "calibration helps": **calibration
+makes a threshold portable.** A threshold fitted on one sample now means the same thing on another.
+
+### 7d. What this changes downstream
+
+`abstain.py` and `arbiter.py` both consume probabilities as probabilities. The honest ordering of work is
+therefore:
+
+- **Any threshold, cost, or risk-limiting logic must use calibrated probabilities** — it is unusable
+  without them (coverage 0.000).
+- **Any rank-based selection can use raw probabilities** — and calibrating first costs a little.
+- The two should be fed differently, which neither module currently does.
+
