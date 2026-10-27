@@ -128,8 +128,7 @@ def audit_n_for_precision(precision: float, defect_rate: float = 0.0,
         return None
     if defect_rate == 0.0:
         return audit_n_zero_defect(precision, confidence)
-    lo = max(1, int(10 * (1 - precision) / max(defect_rate, 1e-9)))
-    hi = cap
+    lo, hi = 1, cap
     for _ in range(100):
         mid = (lo + hi) // 2
         d = int(round(defect_rate * mid))
