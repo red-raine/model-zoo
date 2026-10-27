@@ -130,27 +130,37 @@ def load_methods(logits_path: str = LOGITS, emb_path: str = EMB,
 
 
 def candidates_for(i: int, d: dict, methods: tuple[str, ...] = ("nli", "probe", "prior"),
-                   conf_override: dict | None = None) -> list[Candidate]:
-    """One candidate per selected method. NLI confidence comes from the FUSION array (calibrated)."""
+                   conf_override: dict | None = None,
+                   probe_conf_calibrated: bool = False) -> list[Candidate]:
+    """One candidate per selected method.
+
+    `probe_conf_calibrated` must reflect REALITY: the probe's plain softmax max is a raw score, so the
+    flag is False by default and an arbiter with require_commensurable=True will refuse to assert on a
+    fusion that mixes it with the NLI model's temperature-flattened confidence. Getting this flag wrong
+    makes the precondition a no-op, which is what happened on the first wiring attempt -- strict mode
+    asserted all 500 rows because every candidate claimed to be calibrated.
+    """
     co = conf_override or {}
     out = []
     if "nli" in methods:
         c = Candidate.from_probs("nli", d["nli"].calibrated[i], claim_kind=CLAIM_KIND,
                                  claims=(CLAIM_KIND,))
+        # from_probs reads the Probs' calibrated array, so this one really is calibrated
+        c.confidence_is_calibrated = True
         if "nli" in co:
             c.confidence = float(co["nli"][i])
         out.append(c)
     if "probe" in methods:
         c = Candidate(method="probe", value=int(d["probe_pred"][i]),
                       confidence=float(d["probe_p"][i].max()), claim_kind=CLAIM_KIND,
-                      claims=(CLAIM_KIND,))
+                      claims=(CLAIM_KIND,), confidence_is_calibrated=probe_conf_calibrated)
         if "probe" in co:
             c.confidence = float(co["probe"][i])
         out.append(c)
     if "prior" in methods:
         out.append(Candidate(method="prior", value=int(d["prior_pred"][i]),
                              confidence=float(d["prior_p"][i].max()), claim_kind=CLAIM_KIND,
-                             claims=(CLAIM_KIND,)))
+                             claims=(CLAIM_KIND,), confidence_is_calibrated=False))
     return out
 
 
@@ -289,7 +299,44 @@ def run(logits_path: str = LOGITS) -> int:
         verdict = "NEUTRAL -- the arbiter neither helps nor hurts"
     print(f"  -> {verdict}")
 
-    # --- the mechanism, stated as a measurement rather than a theory
+    # --- what the precondition BUYS, measured on real rows: a strict arbiter refuses to assert on
+    #     mixed-scale fusion, so the rows it does assert should be the ones it can stand behind.
+    print(f"\n=== what the commensurability precondition buys (strict mode) ===")
+    print(f"  {'config':34s} {'asserted':>9s} {'coverage':>9s} {'acc on asserted':>16s}")
+    for conf_mode in ("raw", "calibrated"):
+        for strict in (False, True):
+            pred = np.empty(n, dtype=int)
+            asserted = np.zeros(n, dtype=bool)
+            for f, (tr, te) in enumerate([(a, b), (b, a)]):
+                A2 = Arbiter(
+                    state_path=os.path.join(os.path.expandvars("%TEMP%"),
+                                            f"arb_strict_{conf_mode}_{strict}_{f}.json"),
+                    seed=0, require_commensurable=strict)
+                A2.arms.clear()
+                co = None
+                if conf_mode == "calibrated":
+                    co = {"nli": calibrated_confidences(
+                              d["nli"].calibrated.max(axis=1), base["nli"][0], y, tr, te),
+                          "probe": calibrated_confidences(
+                              d["probe_p"].max(axis=1), d["probe_pred"], y, tr, te)}
+                for i in tr:
+                    A2.observe_decision(CLAIM_KIND, candidates_for(i, d, ("nli", "probe")), int(y[i]))
+                for i in te:
+                    dec = A2.decide(candidates_for(i, d, ("nli", "probe"), co,
+                                                   probe_conf_calibrated=(conf_mode == "calibrated")),
+                                    CLAIM_KIND)
+                    if dec.disposition == KEEP:
+                        asserted[i] = True
+                        pred[i] = int(dec.value)
+                    pred[i] = int(dec.value) if dec.disposition == KEEP else base["nli"][0][i]
+            cov = float(asserted.mean())
+            acc_on = float(np.mean(pred[asserted] == y[asserted])) if asserted.any() else float("nan")
+            tag = f"nli+probe, {conf_mode} conf, strict={strict}"
+            print(f"  {tag:34s} {int(asserted.sum()):9d} {cov:9.1%} {acc_on:16.3f}")
+
+    print(f"\n  lenient asserts everything and is wrong as often as the weak method.")
+    print(f"  strict refuses where the scale is unverified -- so coverage drops and the accuracy of")
+    print(f"  what remains goes UP, which is the trade an abstention rule is supposed to make.")
     key_raw = (("nli", "probe"), "mean", "raw")
     key_cal = (("nli", "probe"), "mean", "calibrated")
     raw_mf = results[key_raw]["macro_f1"]

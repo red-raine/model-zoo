@@ -106,6 +106,35 @@ it as a method invites it to vote twice with whatever it happens to agree with.
 - `Candidate.from_probs` now raises a clear error on a scalar or single-class input instead of an
   IndexError three frames away.
 
+### 6b. The precondition, made real
+
+`Candidate.confidence_is_calibrated` and `Arbiter(require_commensurable=True)`. When a fusion spans
+methods whose confidences are not all probabilities, a strict arbiter **refuses to assert** and
+escalates instead. Measured on the 500 dev rows:
+
+| config | asserted | coverage | accuracy on asserted |
+|---|---|---|---|
+| nli+probe, raw conf, lenient | 500 | 100.0% | **0.648** |
+| nli+probe, raw conf, **strict** | **0** | **0.0%** | — |
+| nli+probe, calibrated conf (either mode) | 402 | 80.4% | **0.881** |
+
+Three readings, all of them useful:
+
+- **Lenient with mixed scales asserts every row at 64.8% accuracy** — it answers a third of them wrong.
+- **Strict with mixed scales asserts nothing.** Zero coverage is aggressive, and it is the correct
+  consequence: if the arbiter cannot compare the numbers, every row is one it should go and check. A
+  rule that refuses to speak is more useful than one that speaks at the accuracy of its worst member.
+- **With commensurable confidences, coverage is 80.4% at 88.1% accuracy** — above the NLI model's own
+  80.8% overall accuracy, because the rows it declines are the hard ones. That is selective prediction
+  working, and it is the first time in this project that an arbiter-shaped component has produced a
+  number better than its strongest input.
+
+The wiring bug that made the precondition a no-op on the first attempt is worth recording: `from_probs`
+and plain `Candidate(...)` both defaulted `confidence_is_calibrated=True`, so strict mode asserted all
+500 rows and the flag looked useless. **A safety flag that defaults to "safe" on both sides is a flag
+that does nothing.** The probe candidate now sets it from the actual provenance of its confidence.
+
+
 ## 7. Honest limits
 
 - **One task, one dataset, 500 dev rows, two folds.** The cross-fit is 2-fold because 500 rows do not
@@ -121,6 +150,10 @@ it as a method invites it to vote twice with whatever it happens to agree with.
 
 1. **Find a task where no method dominates** — that is where the arbiter can earn its place. Candidates:
    `entity_lookup` (many heterogeneous sources) or date precedence across genuinely independent archives.
-2. **Make commensurable confidences a hard precondition** in `arbiter.decide()`: refuse candidates whose
-   confidence is not marked as calibrated. The 0.224 loss is too large to leave to convention.
+2. **~~Make commensurable confidences a hard precondition~~** — done; strict mode refuses to assert.
+   Note the default is still lenient for backwards compatibility, which is the wrong default for
+   production and is labelled as such in the code.
 3. **Never list a base rate as a method.** It is a prior.
+4. **Calibrate every method before it is allowed to vote** — the 402/88.1% result came from doing this
+   after the fact. It should be a precondition of `Candidate` construction, not a repair step.
+

@@ -119,6 +119,16 @@ class Candidate:
     claim_kind: str = ""
     claims: tuple[str, ...] = ()
     answers: bool = True
+    # IS THIS CONFIDENCE A PROBABILITY? Measured reason this flag exists: pooling an NLI model whose
+    # confidences were temperature-flattened (right 79% of the time, says 0.55) with a linear probe whose
+    # confidences were raw softmax (right 64%, says 0.95) produced macro-F1 0.4528 -- EXACTLY the weaker
+    # method's own score. The overconfident method won on scale, not accuracy, and cost 0.224 macro-F1.
+    # Mapping both to P(this method is correct) recovered it.
+    #
+    # Default True because constructing a Candidate is already an assertion that you have a usable
+    # number to pool. Set it False when you know you are passing a raw score, and an Arbiter built with
+    # require_commensurable=True will refuse to assert on a fusion it cannot trust.
+    confidence_is_calibrated: bool = True
 
     @classmethod
     def from_probs(cls, method: str, probs, value: object | None = None,
@@ -165,10 +175,12 @@ class Decision:
     capable: list = field(default_factory=list)
     excluded: list = field(default_factory=list)
     confidence: float = 0.0
+    commensurability: str = "verified"      # verified | unverified | single-method
 
     def as_dict(self) -> dict:
         return {"value": self.value, "disposition": self.disposition, "reason": self.reason,
                 "confidence": round(self.confidence, 4),
+                "commensurability": self.commensurability,
                 "fused": {str(k): round(v, 4) for k, v in self.fused.items()},
                 "weights": {k: round(v, 3) for k, v in self.weights.items()},
                 "capable": self.capable, "excluded": self.excluded}
@@ -189,12 +201,26 @@ class Arbiter:
 
     def __init__(self, state_path: str = DEFAULT_STATE, cost_discard: float = 1.0,
                  cost_wrong: float = 4.0, seed: int = 0, prior: float = 1.0,
-                 weight_mode: str = "mean") -> None:
+                 weight_mode: str = "mean", require_commensurable: bool = False) -> None:
         self.state_path = state_path
         self.cost_discard = cost_discard
         self.cost_wrong = cost_wrong
         self.prior = prior
         self.rng = random.Random(seed)
+        # COMMENSURABILITY. Pooling multiplies confidences across methods, which silently assumes they
+        # are on one scale. Measured: mixing a temperature-flattened NLI model (right 79%, says 0.55)
+        # with a raw-softmax probe (right 64%, says 0.95) gave macro-F1 0.4528 -- exactly the WORSE
+        # method's own score -- because log(0.95) >> log(0.55). Calibrating both to P(this method is
+        # correct) recovered +0.2237.
+        #
+        # With require_commensurable=True a fusion over mixed-scale confidences is DOWNGRADED to
+        # ESCALATE rather than asserted: if the arbiter cannot trust the scale, the honest answer is to
+        # go and find out, not to pick a winner from numbers it cannot compare.
+        #
+        # Default False, for backwards compatibility with callers that predate the flag. That is a
+        # deliberate concession and it is the wrong default for production -- a lenient default is how
+        # the 0.224 loss shipped in the first place. Pass True.
+        self.require_commensurable = require_commensurable
         # WEIGHT MODE. Measured reason this exists: on AVeriTeC verdicts the arbiter scored macro-F1
         # 0.4528 against its best member's 0.6784 -- a LOSS of 0.23 with 120 rows broken and 40
         # fixed. The reliabilities were CORRECTLY ordered (0.787 / 0.640 / 0.609) and the fusion still
@@ -334,6 +360,18 @@ class Arbiter:
         top = fused[best]
         t = self.threshold
 
+        # --- RULE 0 (precondition): are these confidences even comparable?
+        # Pooling multiplies confidences and silently assumes one scale. If any capable method's
+        # confidence is not a probability, the fused mass is not a probability either -- measured cost of
+        # ignoring this: 0.224 macro-F1, with the fusion obeying the overconfident method rather than the
+        # accurate one.
+        if len(capable) <= 1:
+            comm = "single-method"          # nothing is being compared, so nothing can be incomparable
+        else:
+            by_method = {c.method: c for c in candidates}
+            comm = ("verified" if all(by_method[m].confidence_is_calibrated for m in capable)
+                    else "unverified")
+
         # --- RULE 3 (disposition): assert / escalate / refuse.
         if top >= t:
             disp, why = KEEP, (f"fused mass {top:.3f} clears the escalation threshold {t:.2f} "
@@ -342,7 +380,15 @@ class Arbiter:
             disp, why = ESCALATE, (f"fused mass {top:.3f} is below {t:.2f} -- the methods disagree "
                                    f"enough that the cheapest correct move is to go and find out")
 
+        if disp == KEEP and comm == "unverified" and self.require_commensurable:
+            disp = ESCALATE
+            why = (f"REFUSED TO ASSERT: confidence scales are unverified across "
+                   f"{len(capable)} methods. The fused mass {top:.3f} would clear {t:.2f}, but pooling "
+                   f"multiplies confidences and assumes they share a scale -- measured to cost 0.224 "
+                   f"macro-F1 when mixed. Map each method's confidence to P(correct) or escalate.")
+
         return Decision(value=best if disp == KEEP else None, fused=fused, disposition=disp,
+                        commensurability=comm,
                         reason=why, weights=weights, capable=capable, excluded=excluded,
                         confidence=top)
 
@@ -610,6 +656,46 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] one relevant answer outweighs several irrelevant "
           f"ones (winner={d.value})")
+
+    # --- 18. COMMENSURABILITY PRECONDITION. Pooling multiplies confidences, which assumes one scale.
+    #      Measured cost of ignoring it on verdicts: 0.224 macro-F1. A strict arbiter must refuse to
+    #      assert a fusion whose scale it cannot verify.
+    A10 = fresh("h")
+    clean = [Candidate("a", "V", 0.9, "k", ("k",), confidence_is_calibrated=True),
+             Candidate("b", "V", 0.85, "k", ("k",), confidence_is_calibrated=True)]
+    mixed = [Candidate("a", "V", 0.9, "k", ("k",), confidence_is_calibrated=True),
+             Candidate("b", "V", 0.85, "k", ("k",), confidence_is_calibrated=False)]
+    good = (A10.decide(clean, "k").commensurability == "verified"
+            and A10.decide(mixed, "k").commensurability == "unverified")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] commensurability is verified for clean inputs and "
+          f"unverified when any method's confidence is not a probability")
+
+    # --- 18b. a single method has nothing to compare, so it cannot be incomparable
+    one = A10.decide([Candidate("a", "V", 0.9, "k", ("k",), confidence_is_calibrated=False)], "k")
+    good = one.commensurability == "single-method"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] one method is 'single-method', not 'unverified' -- "
+          f"nothing is being compared")
+
+    # --- 18c. LENIENT default still asserts (backwards compatible), STRICT refuses
+    lenient = A10.decide(mixed, "k")
+    A11 = fresh("h2", require_commensurable=True)
+    strict = A11.decide(mixed, "k")
+    good = (lenient.disposition == KEEP and strict.disposition == ESCALATE
+            and strict.value is None and "REFUSED TO ASSERT" in strict.reason)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] strict mode downgrades KEEP -> ESCALATE on unverified "
+          f"scales (lenient={lenient.disposition}, strict={strict.disposition})")
+
+    # --- 18d. strict mode does NOT rescue a fusion that was already escalating, and does not
+    #          interfere with verified inputs
+    good = (A11.decide(clean, "k").disposition == KEEP
+            and A11.decide([Candidate("a", "V", 0.5, "k", ("k",)),
+                            Candidate("b", "W", 0.5, "k", ("k",))], "k").disposition == ESCALATE)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] strict mode leaves verified KEEPs and existing escalations "
+          f"alone")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
