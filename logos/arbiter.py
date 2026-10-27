@@ -120,6 +120,33 @@ class Candidate:
     claims: tuple[str, ...] = ()
     answers: bool = True
 
+    @classmethod
+    def from_probs(cls, method: str, probs, value: object | None = None,
+                   claim_kind: str = "", claims: tuple[str, ...] = (),
+                   answers: bool = True) -> "Candidate":
+        """Build a candidate whose confidence comes from the FUSION array of a `calibrate.Probs`.
+
+        Confidence here is consumed as a probability inside log-linear pooling, so it must be a
+        probability that means what it says. The routing table sets `fusion -> calibrated`: the raw
+        array is 4.23x overconfident (ECE 0.098), and feeding that in would make every method look more
+        certain than it is, in proportion to how sharp its logits happen to be rather than how often it
+        is right.
+
+        `value` defaults to the argmax class, which is the common case; pass it explicitly when the
+        method's answer is not simply the most likely class.
+        """
+        import numpy as _np
+
+        from logos.calibrate import coerce as _coerce
+
+        p = _coerce(probs, "fusion")
+        p = _np.asarray(p, dtype=float)
+        row = p if p.ndim == 1 else p[0]
+        top = int(_np.argmax(row))
+        return cls(method=method, value=top if value is None else value,
+                   confidence=float(row[top]), claim_kind=claim_kind, claims=claims,
+                   answers=answers)
+
 
 @dataclass
 class Decision:
@@ -440,6 +467,37 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a vote against unknown truth counts as wrong, never "
           f"as right")
+
+    # --- 17. ROUTING: a candidate built from a Probs takes the FUSION array, which the table sets to
+    #        calibrated. Raw is 4.23x overconfident, so a candidate built from raw would look more
+    #        certain than it is -- and that would propagate silently through log-linear pooling.
+    import numpy as _np
+
+    from logos.calibrate import Probs as _Probs
+    peaked = _np.array([0.95, 0.03, 0.01, 0.01])
+    flat = _np.array([0.45, 0.25, 0.20, 0.10])
+    pr = _Probs(raw=peaked, calibrated=flat, temperature=4.23)
+    c_cal = Candidate.from_probs("m", pr, claim_kind="k", claims=("k",))
+    good = abs(c_cal.confidence - 0.45) < 1e-12 and c_cal.value == 0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] Candidate.from_probs takes the CALIBRATED array "
+          f"(confidence {c_cal.confidence:.2f}, not the raw {peaked[0]:.2f})")
+
+    # --- 17b. and that difference actually moves the FUSION. Two candidates are required: with one,
+    #         log-linear pooling normalises to 1.0 regardless of the input confidence, so a
+    #         single-candidate test would assert nothing. (I wrote it that way first.)
+    pr_b = _Probs(raw=_np.array([0.30, 0.60, 0.05, 0.05]),
+                  calibrated=_np.array([0.20, 0.40, 0.25, 0.15]), temperature=4.23)
+    A9 = fresh("g2")
+    d_cal = A9.decide([Candidate.from_probs("A", pr, claim_kind="k", claims=("k",)),
+                       Candidate.from_probs("B", pr_b, claim_kind="k", claims=("k",))], "k")
+    d_raw = A9.decide([Candidate("A", 0, 0.95, "k", ("k",)),
+                       Candidate("B", 1, 0.60, "k", ("k",))], "k")
+    diff = abs(d_cal.fused.get(0, 0) - d_raw.fused.get(0, 0))
+    good = diff > 0.05
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] raw confidence would shift the fused mass by "
+          f"{diff:.3f} ({d_cal.fused.get(0, 0):.3f} calibrated vs {d_raw.fused.get(0, 0):.3f} raw)")
 
     # --- 9. weights are NOT hand-set: they start at 0.5 and move only from observations
     A4 = fresh("d")

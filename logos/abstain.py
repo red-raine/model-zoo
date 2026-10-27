@@ -52,13 +52,31 @@ import math
 
 import numpy as np
 
+# `abstain.py` is runnable as a script (`python tools/logos/abstain.py --self-test`), so the package
+# root has to be on the path before the intra-package import. Every other module in this package does
+# the same; skipping it works under pytest and fails from the command line, which is the worst
+# combination.
+import os as _os
+import sys as _sys
+
+_TOOLS = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _TOOLS not in _sys.path:
+    _sys.path.insert(0, _TOOLS)
+
+from logos.calibrate import coerce
+
 N_CLASSES = 4
 
 
 # ------------------------------------------------------------------ cost-sensitive action
-def expected_costs(p: np.ndarray, cost: np.ndarray) -> np.ndarray:
-    """Expected cost of each of the 5 actions: answer 0..3, then abstain last."""
-    p = np.asarray(p, dtype=float)
+def expected_costs(p, cost: np.ndarray) -> np.ndarray:
+    """Expected cost of each of the 5 actions: answer 0..3, then abstain last.
+
+    Accepts a `calibrate.Probs`, in which case the COST consumer's array is used -- and the
+    routing table says that is the CALIBRATED one, because expected cost is only meaningful if
+    the probabilities mean what they say.
+    """
+    p = coerce(p, "cost")
     cost = np.asarray(cost, dtype=float)
     if cost.shape != (N_CLASSES, N_CLASSES):
         raise ValueError(f"cost matrix must be {N_CLASSES}x{N_CLASSES}, got {cost.shape}")
@@ -69,9 +87,15 @@ def expected_costs(p: np.ndarray, cost: np.ndarray) -> np.ndarray:
     return (p[None, :] * cost).sum(axis=1)
 
 
-def abstain_action(p: np.ndarray, cost: np.ndarray, c_defer: float) -> dict:
-    """argmin over {answer each class, abstain}. Returns the action and all expected costs."""
-    p = np.asarray(p, dtype=float)
+def abstain_action(p, cost: np.ndarray, c_defer: float) -> dict:
+    """argmin over {answer each class, abstain}. Returns the action and all expected costs.
+
+    Accepts a `calibrate.Probs` and routes to the CALIBRATED array. Measured necessity: with raw
+    (overconfident, ECE 0.098) probabilities no threshold met a 10% risk target on unseen rows at
+    all -- coverage 0.000 -- while the calibrated array covered 0.72-0.78. A Chow threshold is a
+    statement about probability, so it needs probabilities that mean what they say.
+    """
+    p = coerce(p, "threshold")
     if abs(float(p.sum()) - 1.0) > 1e-6:
         raise ValueError(f"posterior must be normalised, sums to {p.sum()}")
     ec = expected_costs(p, cost)
@@ -128,8 +152,8 @@ class MondrianAPS:
                 return mass
         return 1.0
 
-    def fit(self, probs: np.ndarray, y: np.ndarray) -> "MondrianAPS":
-        probs = np.asarray(probs, dtype=float)
+    def fit(self, probs, y: np.ndarray) -> "MondrianAPS":
+        probs = coerce(probs, "conformal_mondrian")
         y = np.asarray(y, dtype=int)
         for c in range(N_CLASSES):
             m = y == c
@@ -144,9 +168,13 @@ class MondrianAPS:
             self.q[c] = float(scores[max(idx, 0)])
         return self
 
-    def predict_set(self, p: np.ndarray) -> set[int]:
-        """{c : score_c <= q_c}, i.e. each label judged against its OWN threshold."""
-        p = np.asarray(p, dtype=float)
+    def predict_set(self, p) -> set[int]:
+        """{c : score_c <= q_c}, i.e. each label judged against its OWN threshold.
+
+        Routed to "conformal_mondrian", which the table sets to CALIBRATED: measured set size
+        3.05 -> 2.78 with no loss of validity (coverage 0.897 -> 0.880 against a 0.900 target).
+        """
+        p = coerce(p, "conformal_mondrian")
         order = np.argsort(-p)
         out: set[int] = set()
         mass = 0.0
@@ -169,8 +197,8 @@ class MarginalAPS:
         self.alpha = float(alpha)
         self.q = 1.0
 
-    def fit(self, probs: np.ndarray, y: np.ndarray) -> "MarginalAPS":
-        probs = np.asarray(probs, dtype=float)
+    def fit(self, probs, y: np.ndarray) -> "MarginalAPS":
+        probs = coerce(probs, "conformal_marginal")
         y = np.asarray(y, dtype=int)
         scores = np.sort(np.array([MondrianAPS._score(probs[i], y[i])
                                    for i in range(len(y))]))
@@ -179,8 +207,12 @@ class MarginalAPS:
         self.q = float(scores[max(idx, 0)])
         return self
 
-    def predict_set(self, p: np.ndarray) -> set[int]:
-        p = np.asarray(p, dtype=float)
+    def predict_set(self, p) -> set[int]:
+        # routed to "conformal_marginal", which the table sets to RAW: measured set size 1.64 vs
+        # 1.98 calibrated. BUT see the warning in calibrate.ROUTING -- Marginal under-covers the rare
+        # classes by 16-19 points whatever array it gets (CONFLICTING 0.737, NEI 0.706 against a
+        # 0.90 target). Use Mondrian if per-class coverage is what you need.
+        p = coerce(p, "conformal_marginal")
         order = np.argsort(-p)
         out, mass = set(), 0.0
         for c in order:
@@ -326,6 +358,56 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] Mondrian equalises coverage: worst deviation "
           f"from 0.90 {dev_m:.3f} -> {dev_d:.3f}")
+
+    # --- ROUTING IS ENFORCED, NOT DOCUMENTED. The same call, the same cost matrix, the same defer
+    #     cost -- but handed a Probs it must use the consumer's array, and those arrays differ.
+    #     raw is peaked so answering is cheap; calibrated is flat so abstaining wins. If routing were
+    #     ignored, both calls would return the same action and this test would fail.
+    from logos.calibrate import Probs
+
+    peaked = np.array([0.97, 0.01, 0.01, 0.01])
+    flat = np.array([0.55, 0.15, 0.15, 0.15])
+    # a single posterior, so shape (4,) -- abstain_action takes one row, not a batch
+    pr = Probs(raw=peaked.copy(), calibrated=flat.copy(),
+               temperature=4.2, ece_raw=0.098, ece_calibrated=0.031)
+    cm = uniform_cost(c_wrong=1.0)
+    a_cal = abstain_action(pr, cm, c_defer=0.2)              # threshold consumer -> calibrated
+    a_bare = abstain_action(flat, cm, c_defer=0.2)           # bare array passes through
+    a_raw = abstain_action(peaked, cm, c_defer=0.2)
+    good = (a_cal.get("action") == a_bare.get("action")
+            and a_cal.get("action") != a_raw.get("action"))
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] abstain_action routes a Probs to the CALIBRATED array "
+          f"(cal frame -> {a_cal.get('action')}, raw would -> {a_raw.get('action')})")
+
+    # --- and the conformal pair route in OPPOSITE directions from the SAME Probs object
+    rng2 = np.random.default_rng(19)
+    yy2 = rng2.integers(0, 4, 300)
+    zz2 = rng2.normal(0, 1, (300, 4))
+    zz2[np.arange(300), yy2] += 1.5
+    raw2 = np.exp(zz2) / np.exp(zz2).sum(axis=1, keepdims=True)
+    zz3 = zz2 / 4.2
+    cal2 = np.exp(zz3) / np.exp(zz3).sum(axis=1, keepdims=True)
+    pr2 = Probs(raw=raw2, calibrated=cal2, temperature=4.2)
+    mond = MondrianAPS(alphas=0.10).fit(pr2, yy2)
+    marg = MarginalAPS(alpha=0.10).fit(pr2, yy2)
+    mond_cal = MondrianAPS(alphas=0.10).fit(cal2, yy2)
+    marg_raw = MarginalAPS(alpha=0.10).fit(raw2, yy2)
+    good = (np.allclose(mond.q[3], mond_cal.q[3], equal_nan=True)
+            and abs(marg.q - marg_raw.q) < 1e-12)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] Mondrian takes CALIBRATED and Marginal takes RAW from the "
+          f"same Probs (their quantiles match the hand-split fits)")
+
+    # --- an unknown consumer must not silently pick one
+    try:
+        pr2.select("nonsense")
+        bad = False
+    except KeyError:
+        bad = True
+    good = bad
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an unknown consumer raises rather than guessing")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok

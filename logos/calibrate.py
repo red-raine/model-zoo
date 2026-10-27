@@ -426,6 +426,23 @@ class Probs:
                 "routing": {c: ROUTING[c] for c in ROUTING}}
 
 
+def coerce(p, consumer: str):
+    """Accept either a Probs (routed by consumer) or a bare array (passed through).
+
+    This is the enforcement point for the routing table. A consumer that needs calibrated
+    probabilities and is handed a `Probs` gets the calibrated array automatically; one that needs raw
+    gets raw. A bare ndarray still works, because every existing caller passes one and breaking them
+    to prove a point would be theatre -- but the module docstrings now state the requirement, and new
+    call sites have no reason to guess.
+
+    The asymmetry is deliberate: passing a bare array is allowed, passing a WRONG one is not
+    representable. If you have a Probs, you cannot hand its raw array to a threshold rule by accident.
+    """
+    if isinstance(p, Probs):
+        return p.select(consumer)
+    return np.asarray(p, dtype=float)
+
+
 def _softmax_np(z: np.ndarray) -> np.ndarray:
     z = np.asarray(z, dtype=float)
     z = z - z.max(axis=1, keepdims=True)
