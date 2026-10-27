@@ -29,6 +29,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("logic/channel.py", False),
     ("logic/argumentation.py", False),
     ("logic/quantity.py", False),
+    ("logic/smt.py", False),
     ("ontology.py", False),
     ("schema.py", False),
     ("pgm.py", False),

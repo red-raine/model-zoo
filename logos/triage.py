@@ -174,6 +174,66 @@ def check_numeric_consistency(text: str) -> dict:
 
 
 # ----------------------------------------------------------------------- layer 3: truth
+def check_claims_consistency(triples, numerics=()) -> dict:
+    """Layer 2 for EXTRACTED claims, backed by Z3. A real deterministic check, not a heuristic.
+
+    This is where symbolic reasoning actually pays for itself in a refinery. Categorical syllogism
+    validity needs no solver (see logic/syllogism.py), but "do these extracted claims contradict each
+    other?" does -- and it needs no access to the world, which is why it is cheap enough to run on
+    everything before an LLM is consulted.
+
+    Verdict mapping, and the asymmetry is deliberate:
+        INCONSISTENT -> ok=False. SOUND: unsat of a subset stays unsat when more constraints are added.
+        UNKNOWN      -> ok=None.  Some claim had no declared semantics; failing open here is how garbage
+                                  passes a cleaner.
+        CONSISTENT   -> ok=None as well, NOT True. No contradiction was found within the encoded
+                                  fragment, which is not a proof of consistency. The truth router still
+                                  owns whether the claims are TRUE.
+    """
+    from logos.logic.smt import CONSISTENT, INCONSISTENT, check
+
+    rep = check(triples, numerics)
+    if rep.verdict == INCONSISTENT:
+        return {"ok": False, "layer": "semantic",
+                "issues": [f"contradiction among: {'; '.join(rep.core[:4])}"], "report": rep}
+    if rep.verdict == CONSISTENT:
+        return {"ok": None, "layer": "semantic",
+                "issues": ["no contradiction within the encoded fragment (not a proof)"],
+                "report": rep}
+    return {"ok": None, "layer": "semantic", "issues": rep.unencoded[:4], "report": rep}
+
+
+def triage_claims(triples, numerics=(), policy: dict | None = None) -> TriageResult:
+    """Four-router triage for EXTRACTED claims rather than raw text.
+
+    Ordering follows the same cost logic: a contradiction is free to detect and conclusive, so it is
+    checked first and DROPs immediately. Absence of contradiction is NOT a keep -- the truth layer has
+    still not been consulted.
+    """
+    policy = policy or effort_tier(100, 100)
+    layers = {}
+    sem = check_claims_consistency(triples, numerics)
+    layers["semantic"] = sem
+    if sem["ok"] is False:
+        return TriageResult(DROP, layers, f"semantic contradiction: {sem['issues'][0][:90]}")
+    from logos.logic.smt import CONSISTENT as _CONSISTENT
+
+    truth = check_truth("", evidence=None)
+    layers["truth"] = truth
+    # UNKNOWN and CONSISTENT are both "not disproved", but they are NOT the same claim and must not
+    # share wording. Reporting an unencodable predicate as "internally consistent" is the exact false
+    # reassurance this pipeline exists to prevent.
+    verdict = getattr(sem.get("report"), "verdict", None)
+    if verdict == _CONSISTENT:
+        why = "claims are internally consistent within the encoded fragment; truth still unproven"
+    else:
+        why = ("consistency NOT established -- some claims could not be encoded; truth also unproven")
+    if policy["allow_escalate"]:
+        return TriageResult(ESCALATE, layers, why + " -- worth paying to check")
+    return TriageResult(DROP, layers,
+                        why + ", and the scarcity policy does not justify paying to check it")
+
+
 def check_truth(text: str, evidence=None) -> dict:
     """Truth is NOT decided here. This function reports whether evidence EXISTS to decide it.
 
@@ -457,6 +517,28 @@ def run() -> int:
         for name, text, kind in cases:
             r = triage(text, kind, policy=pol)
             print(f"  {r.disposition:9s} {name:32s} {r.reason[:74]}")
+
+    print(f"\n=== the SEMANTIC router on extracted claims (Z3, no LLM) ===")
+    from logos.logic.smt import NumericClaim, Triple
+
+    claim_sets = (
+        ("consistent chain", [Triple("whale", "is_a", "mammal"),
+                              Triple("mammal", "is_a", "warm_blooded")], []),
+        ("cycle: A before B before C before A",
+         [Triple("a", "before", "b"), Triple("b", "before", "c"), Triple("c", "before", "a")], []),
+        ("mutual is_a", [Triple("whale", "is_a", "mammal"),
+                         Triple("mammal", "is_a", "whale")], []),
+        ("numeric contradiction", [],
+         [NumericClaim("bridge", "height", 120.0, 1.0, "m"),
+          NumericClaim("bridge", "height", 95.0, 1.0, "m")]),
+        ("numeric within tolerance", [],
+         [NumericClaim("bridge", "height", 120.0, 1.0, "m"),
+          NumericClaim("bridge", "height", 120.5, 1.0, "m")]),
+        ("undeclared predicate", [Triple("a", "smells_like", "b")], []),
+    )
+    for label, tr, nu in claim_sets:
+        r = triage_claims(tr, nu, policy=effort_tier(500_000, 150_000))
+        print(f"  {r.disposition:9s} {label:36s} {r.reason[:66]}")
 
     print(f"\n=== the cost of a precision claim (100k rows needed) ===")
     print(f"  {'target':>8s} {'audits':>8s} {'filter cost':>12s} {'audit cost':>12s} {'total':>12s}")
