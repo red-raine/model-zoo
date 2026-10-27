@@ -141,7 +141,14 @@ class Candidate:
 
         p = _coerce(probs, "fusion")
         p = _np.asarray(p, dtype=float)
+        if p.ndim == 0:
+            raise ValueError(
+                "from_probs needs a probability VECTOR (one row of class probabilities), got a "
+                "scalar. A Probs built from a 1-D array of confidences is not a distribution over "
+                "classes; build it from (n, k) probabilities instead.")
         row = p if p.ndim == 1 else p[0]
+        if row.size < 2:
+            raise ValueError(f"from_probs needs at least 2 classes, got {row.size}")
         top = int(_np.argmax(row))
         return cls(method=method, value=top if value is None else value,
                    confidence=float(row[top]), claim_kind=claim_kind, claims=claims,
@@ -181,14 +188,38 @@ class Arbiter:
     """
 
     def __init__(self, state_path: str = DEFAULT_STATE, cost_discard: float = 1.0,
-                 cost_wrong: float = 4.0, seed: int = 0, prior: float = 1.0) -> None:
+                 cost_wrong: float = 4.0, seed: int = 0, prior: float = 1.0,
+                 weight_mode: str = "mean") -> None:
         self.state_path = state_path
         self.cost_discard = cost_discard
         self.cost_wrong = cost_wrong
         self.prior = prior
         self.rng = random.Random(seed)
+        # WEIGHT MODE. Measured reason this exists: on AVeriTeC verdicts the arbiter scored macro-F1
+        # 0.4528 against its best member's 0.6784 -- a LOSS of 0.23 with 120 rows broken and 40
+        # fixed. The reliabilities were CORRECTLY ordered (0.787 / 0.640 / 0.609) and the fusion still
+        # collapsed onto the middle method, because those three numbers are nearly equal as pooling
+        # weights. A method that is right 79% of the time and one right 61% of the time were voting
+        # almost equally.
+        #
+        # "mean"     weight = posterior mean. Bounded in [0,1], so two decent methods cannot separate.
+        # "logodds"  weight = log(p / (1-p)), clipped at 0. This is the evidence each vote carries in
+        #            log-odds, which is the same currency the pooling already works in: 0.787 -> 1.31
+        #            and 0.609 -> 0.44, so the strong method now counts 3x, not 1.3x. A method at or
+        #            below chance gets weight 0 -- "no better than guessing" becomes "no opinion",
+        #            which is the semantics that made the capability gate work.
+        if weight_mode not in ("mean", "logodds"):
+            raise ValueError(f"unknown weight_mode {weight_mode!r}; use 'mean' or 'logodds'")
+        self.weight_mode = weight_mode
         self.arms: dict[str, dict[str, Reliability]] = {}
         self.load()
+
+    def weight(self, claim_kind: str, method: str) -> float:
+        m = self.arm(claim_kind, method).mean
+        if self.weight_mode == "mean":
+            return m
+        p = min(max(m, 1e-6), 1 - 1e-6)
+        return max(0.0, _log(p / (1 - p)))
 
     # ------------------------------------------------------------------------ state
     def load(self) -> None:
@@ -248,7 +279,7 @@ class Arbiter:
                 weights[c.method] = 0.0
                 continue
             capable.append(c.method)
-            weights[c.method] = self.arm(claim_kind, c.method).mean
+            weights[c.method] = self.weight(claim_kind, c.method)
 
         if not capable and irrelevant:
             return Decision(disposition=UNKNOWABLE, weights=weights, capable=[],

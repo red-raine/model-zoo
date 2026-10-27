@@ -136,13 +136,26 @@ def mcnemar(y: np.ndarray, a: np.ndarray, b: np.ndarray) -> dict:
     Only rows where the two predictors differ carry information -- which is why the paired test needs
     far fewer rows than an unpaired comparison, and why the discordance rate is the quantity
     `eval_audit` needs in place of its 20% assumption.
+
+    CONVENTION, stated because it was wrong here first. The 2x2 table is
+
+                        b right   b wrong
+            a right        --        n01
+            a wrong       n10        --
+
+    so **b = a right & b wrong** and **c = a wrong & b right**. The first version had these swapped,
+    and the symptom was visible and would have been believable: a run where the new predictor scored
+    0.23 macro-F1 LOWER reported "120 rows fixed, 40 rows broken". Those numbers were right, the
+    labels attached to them were transposed, and the only reason it was caught is that the direction
+    contradicted the score. Anyone reading b/c without checking would have concluded the opposite of
+    the truth.
     """
     ok_a, ok_b = (a == y), (b == y)
-    n01 = int(np.sum(~ok_a & ok_b))          # a wrong, b right
-    n10 = int(np.sum(ok_a & ~ok_b))          # a right, b wrong
+    n01 = int(np.sum(ok_a & ~ok_b))          # a right, b wrong  -> "b" (counts AGAINST b)
+    n10 = int(np.sum(~ok_a & ok_b))          # a wrong, b right  -> "c" (counts FOR b)
     n_disc = n01 + n10
     if n_disc == 0:
-        return {"b": n01, "c": n10, "discordance": 0.0, "p": 1.0}
+        return {"b": 0, "c": 0, "discordance": 0.0, "p": 1.0}
     k = min(n01, n10)
     # exact two-sided binomial: 2 * P(X <= k) with X ~ Bin(n_disc, 0.5), capped at 1
     tail = sum(math.comb(n_disc, i) for i in range(k + 1)) / (2 ** n_disc)
@@ -400,15 +413,16 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] identical predictors: 0 discordant, p=1")
 
-    # --- 6. McNemar's signal is the ASYMMETRY, not the number of discordant pairs
+    # --- 6. McNemar's signal is the ASYMMETRY, not the number of discordant pairs.
+    #     Convention: b = a right & b wrong, c = a wrong & b right.
     yy = np.array([1] * 30 + [0] * 10)
     perfect = yy.copy()
     always_zero = np.zeros_like(yy)
     mc = mcnemar(yy, perfect, always_zero)
-    good = mc["b"] == 0 and mc["c"] == 30 and mc["p"] < 1e-6
+    good = mc["b"] == 30 and mc["c"] == 0 and mc["p"] < 1e-6
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] a 0-30 split is decisive "
-          f"(p={mc['p']:.2e})")
+    print(f"  [{'PASS' if good else 'FAIL'}] a 30-0 split is decisive (b=30 c=0, "
+          f"p={mc['p']:.2e})")
 
     # --- 6b. the same 30 discordant pairs, split 20-10, are NOT significant. Discordance count
     #      alone carries no evidence -- only the imbalance does. "We had 30 disagreements" is not a
