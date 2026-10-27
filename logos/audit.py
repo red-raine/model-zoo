@@ -243,6 +243,77 @@ def _audits_for_target(target: float, defect_rate: float, confidence: float) -> 
 
 
 # ------------------------------------------------------------------------------- tests
+# ------------------------------------------------------------------- what the ruler can measure
+# THE QUESTION THIS ANSWERS: "do we need an eval set that is itself better than 90% accurate, or can we
+# never certify above the accuracy of our own testing set?"
+#
+# The intuition is roughly right but the mechanism is specific, and getting it right changes the budget.
+# There are TWO different error sources and they are not the same thing:
+#
+#   1 SAMPLING error -- the audit is a sample of the keep pile. Handled by Clopper-Pearson. Shrinks with n.
+#   2 LABEL error (the "ruler") -- the human/oracle labelling the sheet is sometimes wrong. Does NOT
+#      shrink with n. It is a BIAS, and it caps what any sample size can establish.
+#
+# With symmetric label noise rate `eps` (each verdict independently wrong with probability eps):
+#
+#       p_measured = eps + (1 - 2*eps) * p_true
+#       p_true     = (p_measured - eps) / (1 - 2*eps)
+#
+# so the measured precision SATURATES as the true precision approaches 1. That is the real ceiling: you
+# cannot distinguish 0.95 from 1.00 when your ruler is 5% noisy. It is not "you can never exceed the
+# ruler", it is "you must know eps and correct for it, and eps bounds the target you can certify".
+
+
+def correct_precision(p_measured: float, eps: float) -> float:
+    """Invert symmetric label noise. Returns the implied true precision, clipped to [0, 1].
+
+    A result at or above 1.0 means the measurement is consistent with perfect precision -- it does NOT
+    mean precision is 1.0, and it does NOT mean the audit passed. It means the ruler is too coarse to tell.
+    """
+    if not 0.0 <= eps < 0.5:
+        raise ValueError("eps must be in [0, 0.5) -- above 0.5 the ruler is worse than a coin")
+    if eps == 0.0:
+        return min(1.0, max(0.0, p_measured))
+    return min(1.0, max(0.0, (p_measured - eps) / (1.0 - 2.0 * eps)))
+
+
+def ruler_limited_precision(eps: float) -> float:
+    """The highest true precision distinguishable from 1.0 when the labeller is wrong at rate `eps`.
+
+    Solve p_measured(1.0) >= p_measured(p*) with a margin of eps: at true precision 1.0 the measurement is
+    1-eps, so anything at or below that level is indistinguishable from perfect. Expressed as the target
+    you can meaningfully aim for, it is 1 - eps.
+    """
+    return max(0.0, 1.0 - eps)
+
+
+def required_ruler_accuracy(target_precision: float) -> float:
+    """Labeller accuracy needed before `target_precision` can be certified at all.
+
+    You need eps << 1 - target. The rule used here is eps <= (1-target)/2, i.e. the ruler's error must be
+    at most half the defect rate you are trying to resolve. To certify 99.9% you need a labeller better
+    than ~0.05%; to certify 90% you need better than ~5%.
+    """
+    if not 0.0 < target_precision < 1.0:
+        raise ValueError("target must be in (0, 1)")
+    return 1.0 - (1.0 - target_precision) / 2.0
+
+
+def audit_n_table(targets=(0.90, 0.95, 0.98, 0.99, 0.995, 0.999),
+                  defect_rates=(0.0, 0.001, 0.005, 0.01), confidence: float = 0.95) -> list[dict]:
+    """Audits needed per target and per expected defect rate. The practical answer to 'is 3k enough?'"""
+    from logos.refinery import audit_n_for_precision
+
+    rows = []
+    for t in targets:
+        r = {"target": t, "required_ruler_accuracy": required_ruler_accuracy(t)}
+        for d in defect_rates:
+            r[f"defects_{d}"] = audit_n_for_precision(t, d, confidence) if d > 0 else \
+                audit_n_for_precision(t, 0.0, confidence)
+        rows.append(r)
+    return rows
+
+
 # ---------------------------------------------------------------------------------- driver
 def run() -> int:
     """Draw a real audit sheet from the AVeriTeC dev keep pile and project the audit budget.
@@ -335,6 +406,49 @@ def run() -> int:
     path = out.write(os.path.join(D, "audit-sheet.dev.jsonl"))
     print(f"\n  sample sheet written: {path}  ({len(out.rows)} rows, label field empty)")
     print(f"  labels accepted: CORRECT | INCORRECT | AMBIGUOUS  (ambiguous counts AGAINST precision)")
+
+    # --- AND THE DISCLOSURE THAT MATTERS MORE THAN ANY NUMBER ABOVE.
+    print(f"\n{'=' * 78}")
+    print(f"=== WHICH DATA IS THIS, AND IS IT STILL HELD OUT? ===")
+    print(f"  There are THREE different sets and they answer different questions:")
+    print(f"    1 DEV/TUNING    fit the temperature (T=4.226), tau, weight modes, review band, strata edges")
+    print(f"    2 HELD-OUT TEST never touched for any decision -> the only source of an unbiased number")
+    print(f"    3 AUDIT SHEET   human labels on the KEEP pile -> the only source of a CERTIFIED precision")
+    print(f"  THE PROBLEM: this run draws the audit sheet from AVeriTeC DEV (500 rows), and dev is set 1.")
+    print(f"  T was fitted by cross-fitting INSIDE it, the routing table was chosen by looking at it, and")
+    print(f"  the confidence bands are its own quantiles. Cross-fitting protects the SCALAR; it does not")
+    print(f"  undo MODEL SELECTION made on the same rows.")
+    print(f"  So every number above is a DEVELOPMENT ESTIMATE, not a certified result. It demonstrates the")
+    print(f"  machinery. It does not establish that the system is 96% precise.")
+    print(f"  WE DO NOT CURRENTLY HOLD A CLEAN HELD-OUT SET. AVeriTeC's train split was used for fine-tuning")
+    print(f"  by the checkpoint's authors, calib is 0.93-accurate (so it was seen), and dev has been used")
+    print(f"  for every decision in this project. Reserving a slice now is the cheapest fix; obtaining the")
+    print(f"  AVeriTeC test-split labels is the correct one.")
+
+    print(f"\n{'=' * 78}")
+    print(f"=== IS 3,000 AUDITS ENOUGH, AND HOW GOOD MUST THE RULER BE? ===")
+    print(f"  {'target':>8s} {'zero defects':>13s} {'0.1% bad':>10s} {'1% bad':>9s} "
+          f"{'ruler must be':>14s}")
+    for r in audit_n_table():
+        def fmt(v):
+            return f"{v:,}" if isinstance(v, int) else "UNACHIEVABLE"
+        print(f"  {r['target']:8.3%} {fmt(r['defects_0.0']):>13s} {fmt(r['defects_0.001']):>10s} "
+              f"{fmt(r['defects_0.01']):>9s} {r['required_ruler_accuracy']:14.2%}")
+    print(f"\n  So: 3,000 audits is the budget for 99.9%, NOT for 90%. A 90% target needs ~29 audits with")
+    print(f"  zero defects. The two costs differ by 100x and they answer different questions.")
+
+    print(f"\n=== the ruler ceiling: you cannot certify what your labeller cannot resolve ===")
+    print(f"  {'labeller accuracy':>18s} {'highest certifiable':>20s}")
+    for eps in (0.0001, 0.001, 0.01, 0.05, 0.10):
+        print(f"  {1 - eps:18.2%} {ruler_limited_precision(eps):20.2%}")
+    print(f"\n  With a 5%-wrong labeller, a measured 0.95 is consistent with a true precision anywhere from")
+    for pm in (0.95, 0.98):
+        print(f"    measured {pm:.2f} -> corrected {correct_precision(pm, 0.05):.4f} (saturated; the")
+        print(f"      correction exceeds the measurement, which means the ruler is too coarse)")
+        break
+    print(f"  THE INFLUENCE IS REAL: label error does not shrink with sample size, so no audit budget")
+    print(f"  fixes a noisy ruler. Double-labelling a subset and reporting the disagreement rate is what")
+    print(f"  turns eps from an assumption into a measurement.")
     return 0
 
 
