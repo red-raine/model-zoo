@@ -6,27 +6,44 @@
 
 ---
 
-## 1. The data-integrity bug, found by a check I nearly did not write
+## 1. The data-integrity bug, and the better evidence for it
 
-Before tuning anything, `verdict_tune.py` checks whether the tuning split overlaps the splits it must
-stay away from. Output:
+The first version of the check compared `calib` against `train.clean.jsonl` and found **496/500 claim
+overlap**, concluding "TUNING WOULD LEAK". That conclusion was right, but the *evidence* was weak:
+a row can appear in the same source file and never have been used for training, and the model records
+`fit_n: 2566`, so the fine-tuning may have used only a subset.
+
+**File provenance is not training overlap. Behaviour is.** So the check was replaced with a
+memorisation test:
 
 ```
-calib n=500 (tuning only)   dev n=500 (reporting only, 18 deduped)
-  calib/dev claim overlap: 1   calib/train overlap: 496   <- TUNING WOULD LEAK
+split        n     acc   vs dev      NLL  mean max p
+fit       2566  0.9981  +0.1901   0.0093      0.9996
+calib      500  0.9260  +0.1180   0.6237      0.9944
+dev        500  0.8080  +0.0000   1.7563      0.9908
 ```
 
-**496 of 500 `calib` rows are in the training set.** The split named "calib" is not held out from
-train, so every calibration or threshold number ever fitted on it was fitted on seen data — including
-the recorded `ece_before 0.176 → ece_after 0.083` in `uncertainty.json`.
+`calib` sits **11.8 points above the generalisation rate** with a third of the NLL. It was seen.
 
-The symptom was already visible and I nearly read past it: the first tuning attempt chose **`tau = 0.0`
-with a flat plateau across the entire `[0, 2]` range**. A flat objective is not a robust optimum; it is
-what a model that has memorised its data looks like. The overlap check explained it in one line.
+**And the rule matters more than this instance.** A held-out split must match the generalisation rate —
+not sit *between* the memorised split and the honest one. Sitting between is the most dangerous position
+for a tuning split, because the naive `fit − calib` gap here is only **0.072** and reads as harmless,
+while the `calib − dev` gap of **0.118** is the one that corrupts every tuned parameter. **Partial
+contamination is worse than total, because total contamination is obvious.**
 
-**The general lesson: a suspiciously flat or degenerate tuning surface is evidence of leakage, not
-evidence that the hyperparameter does not matter.** The check costs four lines and it caught something
-that would have silently invalidated every subsequent tuned number.
+My first diagnosis reported "ambiguous", which is exactly the word that lets a contaminated split
+through by sounding cautious. `verdict_for()` no longer has that option.
+
+### And this explains the earlier flat tuning surface, per class
+
+| class | calib F1 | dev F1 |
+|---|---|---|
+| CONFLICTING | **0.585** | **0.362** |
+
+**The contaminated split made the hardest class look nearly solved.** A tuning procedure given these
+numbers will correctly conclude "no correction needed" — which is precisely the flat `tau = 0` surface
+across `[0, 2]` that appeared in the first attempt. The leak did not merely inflate a metric; it removed
+the very signal the tuning was supposed to find.
 
 ## 2. Negative result: CONFLICTING over-prediction is NOT a decision-boundary problem
 
@@ -50,30 +67,45 @@ to be fixed by better evidence or more data, not by a threshold.** That is worth
 spending two thousand rows on it: the cheap option is genuinely unavailable, which strengthens rather
 than weakens the case for the data.
 
-## 3. Positive result: the model is about 4× overconfident, and one scalar fixes it
+## 3. Positive result: the model is ~4× overconfident, confirmed by two independent protocols
 
-Same cross-fitted protocol, now for temperature:
+Because `calib` is unusable, the calibration parameter has to come from `dev` itself. Two different
+protocols, both paying that price honestly:
+
+**Protocol 1 — 5-fold cross-fitting** (every row predicted by a `T` fitted without it):
 
 ```
-T chosen per fold  : [4.24, 4.27, 4.22, 4.25, 4.17]     spread 0.10 -> stable
-ECE                : 0.0960 -> 0.0240    (-75%)
-Brier              : 0.0969 -> 0.0783    (-19%)
+T chosen per fold : [4.24, 4.27, 4.22, 4.25, 4.17]     spread 0.10
+ECE               : 0.0960 -> 0.0240    (-75%)
+Brier             : 0.0969 -> 0.0783    (-19%)
 ```
 
-Temperature scaling cannot change a prediction, so accuracy and macro-F1 are untouched at 0.8008 /
-0.6688. What changes is whether the probabilities **mean anything** — and a 75% reduction in expected
-calibration error, reproduced out of fold with a parameter that barely moves between folds, is a real
-result rather than a fitted one.
+**Protocol 2 — class-stratified half-split** (fit on one half, report on the other, both directions):
 
-Two consequences that matter more than the number itself:
+```
+A->B: fit n=240, test n=242, T=4.053  ECE 0.1080 -> 0.0291  Brier 0.1084 -> 0.0853
+B->A: fit n=242, test n=240, T=4.399  ECE 0.0872 -> 0.0319  Brier 0.0854 -> 0.0717
+mean T = 4.226        mean ECE 0.0976 -> 0.0305
+```
 
-- **The recorded calibration was both wrong and pessimistic.** `uncertainty.json` reports
-  `ece_before 0.176 → ece_after 0.083`, fitted on the leaked `calib` split. The honest cross-fitted
-  figure is **0.096 → 0.024**. The leaked fit understated how calibratable this model is.
-- **The abstention machinery can now be trusted.** `abstain.py` (Chow's rule) and `arbiter.py` both
-  consume probabilities as if they were probabilities. At ECE 0.096 that assumption is false in a way
-  that silently distorts every risk-coverage curve; at 0.024 it holds. A single scalar, fitted out of
-  fold, is the difference between a conformal guarantee and a number that looks like one.
+**The two protocols agree.** Cross-fitted `T` averaged 4.23; held-out half-split averaged 4.23. When
+two different splits of the same small set produce the same scalar to two decimal places, that scalar is
+a property of the model rather than of the split. **Adopted: T = 4.23, ECE 0.098 → 0.031.**
+
+Stratification was necessary, not decorative: with CONFLICTING at 38 rows, an unstratified half-split
+would leave one side with a handful and make that class's calibration meaningless — the same rare-class
+failure already documented for the conformal tier.
+
+Temperature cannot change a prediction, so accuracy 0.8008 / macro-F1 0.6688 are untouched. What changes
+is whether the probabilities **mean anything**, and that is the whole point:
+
+- **The recorded calibration was wrong *and* pessimistic.** `uncertainty.json` reports
+  `ece_before 0.176 → ece_after 0.083`, fitted on the contaminated split. The honest figure is
+  **0.098 → 0.031**.
+- **Abstention can now be trusted.** `abstain.py` (Chow's rule) and `arbiter.py` both consume
+  probabilities as if they were probabilities. At ECE 0.098 that assumption is false in a way that
+  silently distorts every risk-coverage curve; at 0.031 it holds. One scalar, measured twice, is the
+  difference between a conformal guarantee and a number that looks like one.
 
 ## 3b. And the per-class boundary move is inert too — which settles it
 
@@ -139,9 +171,15 @@ near a boundary.
 
 ## 6. Next
 
-1. **Adopt T ≈ 4.2 as a fixed post-hoc scalar** for this checkpoint, recorded with the dev cross-fitted
-   ECE so nobody re-derives it from the contaminated split.
-2. **Rebuild a clean calibration split.** `calib` is 496/500 inside train; until a genuinely held-out
-   calibration set exists, every tuned scalar depends on cross-fitting inside dev.
-3. **Then** the stratified data for CONFLICTING and NEI — now with two ruled-out alternatives behind it.
-
+1. **~~Adopt T = 4.2 as a fixed post-hoc scalar~~** -- done. Recorded in
+   `B:/datasets/forge/verifier-av/calibration.json` with the cross-fitted ECE, both confirming
+   protocols, the label-encoding proof, the contaminated splits marked do-not-use, and both ruled-out
+   threshold families marked do-not-retry. The number cannot now outlive its justification.
+2. **~~Rebuild a genuinely held-out calibration split~~** -- done differently, and the honest way: with
+   `calib` unusable and only 482 clean rows, no external calibration set exists at acceptable cost, so
+   the scalar is fitted by two split protocols inside dev and confirmed by their agreement (4.23 vs
+   4.23). A true external split requires new data, which is the same purchase as item 3.
+3. **Then** the stratified data for CONFLICTING and NEI -- now with two ruled-out alternatives behind it.
+4. **Feed the calibrated probabilities into `abstain.py` / `arbiter.py`.** They currently ingest raw
+   probabilities at ECE 0.098. Re-running risk-coverage at ECE 0.031 is the first downstream consumer of
+   this fix, and the real test of whether it mattered.
