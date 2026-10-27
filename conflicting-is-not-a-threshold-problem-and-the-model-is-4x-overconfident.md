@@ -248,3 +248,86 @@ therefore:
 - **Any rank-based selection can use raw probabilities** — and calibrating first costs a little.
 - The two should be fed differently, which neither module currently does.
 
+---
+
+## 8. The third consumer: conformal sets. Theory said "free", and it was right about validity — but not about size
+
+Conformal validity is **distribution-free**: it needs exchangeability, not calibrated scores. So the
+prediction was that coverage would hit `1 - alpha` for raw and calibrated alike, while efficiency (mean
+set size) could differ. Measured on a stratified half-split, `alpha = 0.10`, target coverage 0.900:
+
+| method | variant | coverage | mean set size |
+|---|---|---|---|
+| **Mondrian** | raw | 0.897 | 3.05 |
+| **Mondrian** | calibrated | 0.880 | **2.78** |
+| **Marginal** | raw | 0.913 | **1.64** |
+| **Marginal** | calibrated | 0.901 | 1.98 |
+
+**Validity held, as the theory says** — all four are within noise of 0.90. That is the reassuring half.
+
+**Efficiency moved in OPPOSITE directions**, which I did not predict:
+
+- **Mondrian sets got smaller** (3.05 → 2.78). Per-class quantiles of `1 - p[y]`: raw overconfidence
+  pushes wrong-row scores high and right-row scores to ~0, producing extreme per-class thresholds.
+  Calibration compresses the range and the per-class cut becomes tighter.
+- **Marginal sets got larger** (1.64 → 1.98). A single global quantile is dominated by a handful of
+  extremely confident rows under raw probabilities; calibration flattens the distribution, so more mass
+  sits mid-range and the global cut has to admit more classes.
+
+So "does calibration help conformal?" has no single answer — **it depends on which conformal method**,
+and the directions are opposite. A blanket "always calibrate" rule would be wrong for Marginal.
+
+### And the most useful per-class finding
+
+```
+CONFLICTING per-class coverage:  raw 1.000  ->  calibrated 0.895
+```
+
+Raw produced **perfect** coverage for CONFLICTING with a large set — safe, and useless: it was buying
+its guarantee by including nearly everything. Calibrated sits at **0.895 against a 0.90 target** with a
+smaller set. That is the guarantee doing its job instead of hiding behind over-coverage.
+
+Note the sample size before trusting this: the test half holds roughly 19 CONFLICTING rows, so 1.000 →
+0.895 is a difference of about two rows. It is suggestive, not established. It is recorded because the
+*direction* is consistent with the set-size result, not because 19 rows can settle it.
+
+## 9. The resulting API rule — three consumers, three different answers
+
+| consumer | which probabilities | evidence |
+|---|---|---|
+| threshold / cost / risk-limiting | **calibrated** | raw cannot meet a 10% risk target at all (coverage 0.000) |
+| rank-based selection (AURC) | **raw** | calibrating costs 0.005 AURC |
+| conformal — Mondrian | **calibrated** | smaller sets (3.05 → 2.78) |
+| conformal — Marginal | **raw** | smaller sets (1.98 vs 1.64) |
+| class posterior for fusion (`arbiter`) | **calibrated** | it is consumed as a probability in log-linear pooling |
+
+"Always calibrate" is wrong in two of five rows, and "never calibrate" is wrong in three. The defect in
+`abstain.py` and `arbiter.py` is therefore not that they use the wrong probabilities — it is that
+**neither module states which it needs**, so a caller cannot tell whether it is holding the right one.
+The fix is an explicit requirement at each entry point, not a global switch: `calibrate.Probs` now
+carries both arrays and `Probs.select(consumer)` routes by this table, **raising on an unknown consumer
+instead of guessing**.
+
+### 9b. And the table contains a trap worth flagging
+
+Routing says `conformal_marginal -> raw`, because raw gave the smallest sets (1.64 vs 1.98). But the
+per-class numbers in the same run say something the set-size column hides:
+
+| Marginal, raw | coverage | n |
+|---|---|---|
+| SUPPORTED | 0.889 | 54 |
+| REFUTED | 0.967 | 152 |
+| **NOT_ENOUGH_EVIDENCE** | **0.706** | 17 |
+| **CONFLICTING** | **0.737** | 19 |
+
+**Marginal conformal under-covers the rare classes by 16–19 points against a 0.90 target**, with raw
+probabilities and the smallest sets of any configuration. That is not a calibration failure — it is what
+a *marginal* guarantee means: it promises 90% on average and delivers it by being generous on REFUTED
+(0.967) at the expense of the classes that matter least often.
+
+So the row means "**given** you are using Marginal, use raw". It does not mean Marginal is the right
+method. The routing table now carries that warning inline, because a table invites blind compliance —
+and this is exactly the kind of row that would be followed correctly and still be wrong.
+
+
+

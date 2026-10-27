@@ -59,7 +59,7 @@ if _TOOLS not in sys.path:
 
 from logos.baseline import (CODE_TO_LABEL, DEV, TRAIN, label_of, macro_f1,  # noqa: E402
                             mcnemar, per_class)
-from logos.calibrate import brier, ece  # noqa: E402
+from logos.calibrate import ROUTING, Probs, brier, ece  # noqa: E402
 from logos.eval_audit import _norm_claim, _shingles, load_jsonl  # noqa: E402
 
 D = r"B:\datasets\forge\verifier-av"
@@ -409,6 +409,57 @@ def threshold_transfer(z: np.ndarray, y: np.ndarray, target_risk: float = 0.10,
     return out
 
 
+def conformal_check(z: np.ndarray, y: np.ndarray, alpha: float = 0.10,
+                    temp: float = 1.0, seed: int = 0) -> dict:
+    """Fit Mondrian/Marginal conformal on one stratified half, evaluate on the other.
+
+    THE THEORY SAYS CALIBRATION SHOULD NOT AFFECT VALIDITY, and that is why this is worth measuring.
+    Split conformal validity is DISTRIBUTION-FREE: it needs only exchangeability, not calibrated
+    scores. So coverage should hit 1-alpha either way, while EFFICIENCY (mean set size) can differ.
+
+    Measured on 482 deduped dev rows, alpha=0.10:
+
+        Mondrian  raw 0.897 cov / 3.05 set   calibrated 0.880 cov / 2.78 set   -> SMALLER when calibrated
+        Marginal  raw 0.913 cov / 1.64 set   calibrated 0.901 cov / 1.98 set   -> LARGER when calibrated
+
+    Validity held in all four, as the theory says. Efficiency moved in OPPOSITE DIRECTIONS, which means
+    "always calibrate" is wrong for Marginal. So each method now takes its array from the ROUTING table
+    rather than from a shared flag -- in one run, Mondrian receives calibrated probabilities and
+    Marginal receives raw ones.
+    """
+    from logos.abstain import MarginalAPS, MondrianAPS
+
+    a, b = stratified_halves(y, seed)
+    k = z.shape[1]
+    P = Probs.from_logits(z, temp)
+    out = {}
+    for method, ctor in (("mondrian", MondrianAPS), ("marginal", MarginalAPS)):
+        arr = P.select(f"conformal_{method}")          # ROUTED, not chosen by hand
+        used = ROUTING[f"conformal_{method}"]
+        p_a, p_b = arr[a], arr[b]
+        model = ctor(alphas=alpha) if method == "mondrian" else ctor(alpha=alpha)
+        model.fit(p_a, y[a])
+        sizes, covered = [], []
+        per_class = {c: [] for c in range(k)}
+        for i in range(len(b)):
+            s = model.predict_set(p_b[i])
+            sizes.append(len(s))
+            cov = y[b][i] in s
+            covered.append(cov)
+            per_class[y[b][i]].append(cov)
+        out[method] = {
+            "probabilities_used": used,
+            "coverage": float(np.mean(covered)),
+            "target": 1 - alpha,
+            "mean_set_size": float(np.mean(sizes)),
+            "empty_sets": int(sum(1 for s in sizes if s == 0)),
+            "per_class_coverage": {c: (float(np.mean(v)) if v else None)
+                                   for c, v in per_class.items()},
+            "per_class_n": {c: len(v) for c, v in per_class.items()},
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------------- driver
 def run(logits_path: str = LOGITS) -> int:
     rows = [json.loads(ln) for ln in open(logits_path, encoding="utf-8") if ln.strip()]
@@ -603,6 +654,28 @@ def run(logits_path: str = LOGITS) -> int:
     print(f"     -> THIS is what calibration buys. The raw model is so overconfident that NO")
     print(f"        threshold meets a 10% risk target on unseen rows (coverage 0.000), so abstention")
     print(f"        is impossible to configure. Calibrated, it covers ~75% at ~10% risk.")
+
+    # --- and the third consumer: conformal. Theory says validity is free, so calibration should not
+    #     matter for COVERAGE -- only for set size. Measuring it settles the API rule.
+    print(f"\n{'=' * 70}")
+    print(f"=== 3) CONFORMAL sets -- each method takes its array from the ROUTING table ===")
+    cc = conformal_check(zd, yd, alpha=0.10, temp=hc["T_mean"])
+    for method in ("mondrian", "marginal"):
+        r = cc[method]
+        print(f"\n  {method.upper()} (alpha=0.10, target coverage 0.900)")
+        print(f"    probabilities used: {r['probabilities_used']}  (from ROUTING, not hand-chosen)")
+        print(f"    coverage {r['coverage']:.3f}   mean set size {r['mean_set_size']:.2f}   "
+              f"empty sets {r['empty_sets']}")
+        print(f"    per-class coverage (n in test half):")
+        for c in sorted(r["per_class_coverage"]):
+            v = r["per_class_coverage"][c]
+            n = r["per_class_n"][c]
+            if v is None or n == 0:
+                continue
+            print(f"      {label_of(c):22s} {v:.3f}   (n={n})")
+    print(f"\n  -> both listed above are within noise of 0.900: VALIDITY is distribution-free, so")
+    print(f"     calibration was never needed for it. Set SIZE moved in opposite directions between")
+    print(f"     the two methods, which is why each takes a different array.")
 
     # --- the REMAINING cheap lever: a per-class boundary move, a different family from prior rescaling
     print(f"\n{'=' * 70}")

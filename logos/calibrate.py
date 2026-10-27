@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -348,6 +349,90 @@ def compare_to_rule(rule_probs, model_probs, labels, folds: int = 5, seed: int =
     }
 
 
+# ------------------------------------------------------------------- routing by consumer
+# MEASURED, NOT ASSUMED. Each consumer needs a different array, and the directions were measured on
+# 482 deduped AVeriTeC dev rows (see knowledge/conflicting-is-not-a-threshold-problem...):
+#
+#   threshold / cost / risk-limiting   calibrated   raw cannot meet a 10% risk target at all
+#                                                   (coverage 0.000 vs 0.72-0.78 calibrated)
+#   rank-based selection (AURC)        raw          calibrating COSTS 0.005 AURC
+#   conformal, Mondrian                calibrated   smaller sets: 3.05 -> 2.78
+#   conformal, Marginal                raw          smaller sets: 1.64 vs 1.98 calibrated
+#   class posterior for fusion         calibrated   consumed AS a probability in log-linear pooling
+#
+# "Always calibrate" is wrong for two of five. "Never calibrate" is wrong for three. The point is
+# that the choice cannot be a global switch, so it is a table with a guard.
+#
+# A WARNING ABOUT THE MARGINAL ROW, because a routing table invites blind compliance. Marginal
+# conformal makes a MARGINAL guarantee by construction, and it under-covers the rare classes no matter
+# which array it is given: measured per-class coverage 0.737 for CONFLICTING and 0.706 for
+# NOT_ENOUGH_EVIDENCE against a 0.90 target, with raw probabilities and the smallest sets of any
+# configuration. The row says "raw" because that minimises set size GIVEN that you are using Marginal;
+# it does not say Marginal is appropriate. If you need per-class coverage, use Mondrian, and Mondrian
+# takes calibrated.
+ROUTING: dict[str, str] = {
+    "threshold": "calibrated",
+    "cost": "calibrated",
+    "risk_limiting": "calibrated",
+    "ranking": "raw",
+    "conformal_mondrian": "calibrated",
+    "conformal_marginal": "raw",
+    "fusion": "calibrated",
+}
+
+
+@dataclass
+class Probs:
+    """Both probability arrays, so a consumer must state which it needs.
+
+    A bare ndarray cannot say whether it is calibrated, and that ambiguity is the actual defect: two
+    modules in this project consume probabilities directly and neither can be audited for which one it
+    holds. Carrying both and routing explicitly makes the question answerable.
+    """
+
+    raw: np.ndarray
+    calibrated: np.ndarray
+    temperature: float = 1.0
+    ece_raw: float | None = None
+    ece_calibrated: float | None = None
+
+    @classmethod
+    def from_logits(cls, logits: np.ndarray, temperature: float,
+                    labels: np.ndarray | None = None, bins: int = 10) -> "Probs":
+        raw = _softmax_np(logits)
+        cal = _softmax_np(logits / temperature)
+        ece_r = ece_c = None
+        if labels is not None:
+            onehot = np.eye(raw.shape[1])[labels]
+            ece_r = ece(raw.ravel(), onehot.ravel(), bins)
+            ece_c = ece(cal.ravel(), onehot.ravel(), bins)
+        return cls(raw=raw, calibrated=cal, temperature=temperature,
+                   ece_raw=ece_r, ece_calibrated=ece_c)
+
+    def select(self, consumer: str) -> np.ndarray:
+        """Return the array this consumer needs, or raise. Unknown consumers FAIL CLOSED.
+
+        Failing open here would put an unaudited array into a threshold rule, which is the exact
+        failure this class exists to prevent.
+        """
+        if consumer not in ROUTING:
+            raise KeyError(f"unknown probability consumer {consumer!r}; known: "
+                           f"{sorted(ROUTING)}. Refusing to guess which array to use.")
+        return self.calibrated if ROUTING[consumer] == "calibrated" else self.raw
+
+    def describe(self) -> dict:
+        return {"temperature": self.temperature, "ece_raw": self.ece_raw,
+                "ece_calibrated": self.ece_calibrated,
+                "routing": {c: ROUTING[c] for c in ROUTING}}
+
+
+def _softmax_np(z: np.ndarray) -> np.ndarray:
+    z = np.asarray(z, dtype=float)
+    z = z - z.max(axis=1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(axis=1, keepdims=True)
+
+
 # ------------------------------------------------------------------------------- tests
 def run_self_test() -> bool:
     print("logos.calibrate - SELF TEST")
@@ -493,6 +578,40 @@ def run_self_test() -> bool:
     good = abs(brier(Identity()(distorted), yc) - brier(distorted, yc)) < 1e-12
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] identity calibration is a true no-op baseline")
+
+    # --- 14. ROUTING makes the measured rule executable, and the two arrays are genuinely different
+    z = np.random.default_rng(4).normal(0, 2, (200, 4))
+    pr = Probs.from_logits(z, temperature=4.2, labels=np.zeros(200, dtype=int))
+    good = (not np.allclose(pr.raw, pr.calibrated)
+            and pr.select("threshold").shape == pr.raw.shape)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a Probs carries two DIFFERENT arrays and routes between "
+          f"them")
+
+    # --- 15. the routing directions are the measured ones, not a global switch
+    good = (np.array_equal(pr.select("threshold"), pr.calibrated)
+            and np.array_equal(pr.select("ranking"), pr.raw)
+            and np.array_equal(pr.select("conformal_mondrian"), pr.calibrated)
+            and np.array_equal(pr.select("conformal_marginal"), pr.raw))
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] routing matches the measurements: threshold/Mondrian -> "
+          f"calibrated, ranking/Marginal -> raw")
+
+    # --- 16. an unknown consumer FAILS CLOSED rather than silently picking one
+    try:
+        pr.select("vibes")
+        good = False
+    except KeyError:
+        good = True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an unknown consumer raises instead of guessing")
+
+    # --- 17. and not every consumer wants the same thing -- the whole reason a table is needed
+    wanted = set(ROUTING.values())
+    good = wanted == {"raw", "calibrated"}
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the table contains BOTH answers, so no global switch "
+          f"could be correct")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
