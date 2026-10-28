@@ -192,6 +192,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
     # ---- 3. the evidence gate. CAN ONLY DEMOTE. never promotes, because a relevance score is not support.
     gate = None
     gated = False
+    refuter = rv.refuted_by
     if evidence:
         rc = _rerank()
         if rc is None:
@@ -201,7 +202,34 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
             gate = rc.evidence_sufficient(row, evidence, threshold=gate_threshold)
             gated = True
             why.append(f"gate: {gate['reason']}")
-            if gate.get("sufficient") is False and disposition == KEEP:
+            # ---- THE LOW BAND GETS A DECIDER, not a shrug. A passage the encoder could not rank is
+            # examined by an exact rule: does it state a DIFFERENT value for the SAME kind of quantity?
+            # This is the only path by which evidence can justify a DROP, so it is the difference
+            # between a pipeline that can reject and one that can only abstain.
+            # EVERY candidate, not just the low band. Measured: a contradiction can score 0.867 and
+            # land in `sufficient`, because contradicting a claim is a way of being ON-TOPIC. Band
+            # membership is a relevance judgement with no bearing on whether two passages disagree.
+            for cand in (gate.get("all") or []):
+                try:
+                    from logos import numeric_conflict
+                    nc = numeric_conflict.conflicts(row, evidence[cand["index"]])
+                except Exception as e:                            # noqa: BLE001
+                    # `continue`, not `break`: one unreadable candidate must not cancel the check on
+                    # the others. An earlier version raised KeyError here because `all` entries carry
+                    # `index` while only `low_band` entries carry `text`, and the break silently
+                    # disabled the entire refutation path.
+                    why.append(f"candidate {cand.get('index')} not checkable ({type(e).__name__})")
+                    continue
+                if nc["conflict"]:
+                    d = nc["disagreements"][0]
+                    disposition = DROP
+                    refuter = "numeric_conflict"
+                    band = "low band" if cand["prob"] < gate_threshold else "top band"
+                    why.append(f"REFUTED by numeric_conflict ({band}, relevance {cand['prob']:.4f}): "
+                               f"row says {d['claim_raw']}, evidence says {d['passage_raw']} "
+                               f"({d['family']})")
+                    break
+            if disposition == KEEP and gate.get("sufficient") is False:
                 disposition = ESCALATE
                 why.append("KEEP demoted to ESCALATE: no evidence cleared the relevance threshold")
             elif gate.get("sufficient") is None:
@@ -211,7 +239,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
                     why.append("KEEP demoted to ESCALATE: gate unreachable, so evidence is UNKNOWN")
 
     return {"row": row[:200], "kind": kind, "disposition": disposition,
-            "refuted_by": rv.refuted_by, "cost": round(rv.total_cost, 3), "repaired": None,
+            "refuted_by": refuter, "cost": round(rv.total_cost, 3), "repaired": None,
             "n_findings": len(findings), "gated": gated,
             "gate_sufficient": (gate or {}).get("sufficient"),
             "low_band": len((gate or {}).get("low_band") or []),
@@ -311,6 +339,24 @@ def measure(fixture=None) -> int:
         r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
                          evidence=["One mile equals exactly 1.609344 kilometres by definition."])
         print(f"  correct claim + relevant evidence   -> {r['disposition']}")
+
+    print("\n=== evidence -> disposition, the path that makes a reject pile possible ===")
+    if rc is not None:
+        cases = [
+            ("One mile is 1.609344 kilometres.", ["One mile is 1.500000 kilometres."],
+             "contradicting number"),
+            ("One mile is 1.609344 kilometres.", ["One mile equals exactly 1.609344 kilometres."],
+             "supporting passage"),
+            ("One mile is 1.609344 kilometres.", ["Mile is also a surname in some families."],
+             "off-topic passage"),
+            ("Apoptosis is programmed cell death.", ["Apoptosis is uncontrolled cell proliferation."],
+             "semantic contradiction, no numbers"),
+        ]
+        for row_text, ev, label in cases:
+            r = evaluate_row(row_text, kind="text", evidence=ev)
+            print(f"  {label:34s} -> {r['disposition']:9s} {r['refuted_by'] or ''}")
+        print("  the encoder chose WHICH passage to look at; numeric_conflict DECIDED. Only the")
+        print("  contradiction drops, and it names both values so the verdict can be audited.")
 
     print("\n=== what this number is and is not ===")
     print("  IT IS: proof the composition runs, and that a refutation short-circuits while an open")
@@ -463,6 +509,49 @@ def run_self_test() -> bool:
         ok = ok and good
         print(f"  [{'PASS' if good else 'FAIL'}] a PASSING gate leaves the same row at "
               f"{keep['disposition']}")
+
+        # --- A CONTRADICTION NOW BECOMES A DROP. This is the reject pile, and before this wiring the
+        #     low band was returned and then ignored, so REFUTED was unreachable from evidence.
+        r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
+                         evidence=["One mile is 1.500000 kilometres."])
+        good = r["disposition"] == DROP and r["refuted_by"] == "numeric_conflict"
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] contradicting numeric evidence -> {r['disposition']} "
+              f"by {r['refuted_by']!r} (the reject pile is reachable)")
+
+        # --- REGRESSION: a contradiction that scores ABOVE the relevance threshold must still be
+        #     refuted. This is the case my low-band-only wiring silently missed: 0.867 is "very
+        #     relevant", and relevance is not support.
+        r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
+                         evidence=["One mile is 1.500000 kilometres."])
+        high_band = [w for w in r["why"] if "top band" in w or "low band" in w]
+        good = r["disposition"] == DROP and bool(high_band)
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] a HIGH-relevance contradiction still drops "
+              f"({r['disposition']}; {high_band[0][:58] if high_band else 'no band recorded'})")
+
+        # --- and a SUPPORTING passage must not become a drop, or the validator is just a hammer
+        r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
+                         evidence=["One mile equals exactly 1.609344 kilometres."])
+        good = r["disposition"] != DROP
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] supporting evidence does NOT trigger a drop "
+              f"({r['disposition']})")
+
+        # --- an OFF-TOPIC passage must not become a drop either
+        r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
+                         evidence=["Mile is also a surname in some European families."])
+        good = r["disposition"] == ESCALATE
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] off-topic evidence is {r['disposition']}, not a drop")
+
+        # --- a semantic contradiction with no numbers stays ESCALATE, honestly
+        r = evaluate_row("Apoptosis is programmed cell death.", kind="text",
+                         evidence=["Apoptosis is uncontrolled cell proliferation."])
+        good = r["disposition"] == ESCALATE
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] a NON-numeric contradiction stays {r['disposition']} "
+              f"(out of scope, not guessed)")
 
         # --- and a contradicting passage is not silently swallowed: it survives in the low band
         dem2 = evaluate_row("The Eiffel Tower is 330 metres tall.", kind="text",

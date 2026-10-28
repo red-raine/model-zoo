@@ -70,6 +70,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("second_source.py", True),
     ("rerank_client.py", True),
     ("pipeline.py", True),
+    ("numeric_conflict.py", False),
+    ("onnx_rerank.py", True),
     ("egress.py", True),                   # live dual-path probe
 )
 

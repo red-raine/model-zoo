@@ -214,3 +214,70 @@ That is the convention this repo runs on.
   abstain pile is the real measure of coverage, and it has not been sized on a real corpus yet.
 - `ast_repair.repair_with_oracle` needs `allow_exec=True`, which L008 forbids by default, so it remains
   available but unused. The only active repair is numeric.
+
+
+---
+
+## Update 2026-10-28 (b) -- ONNX on the host, and an exact contradiction decider
+
+### New modules
+| module | what it does |
+|---|---|
+| `logos/onnx_rerank.py` | runs the int8 ONNX cross-encoder natively; no Docker, no HTTP |
+| `logos/numeric_conflict.py` | decides a numeric contradiction exactly, by naming both values |
+
+### The ONNX model was already on disk
+`B:/ai-stack/models/argus-reranker/model_int8.onnx` -- 569.7 MB int8, `XLMRobertaForSequenceClassification`
+24 layers x 1024 hidden, which identifies it as **bge-reranker-v2-m3** by architecture and parameter count
+alone. `onnxruntime 1.20.1` is on the host, so it runs with no container:
+**native == service on 5 pairs, max diff 0.000289.**
+Native is **88.5 ms/pair vs 111.3 ms/pair (1.26x)** -- the model dominates and the HTTP hop is ~23 ms, so
+the benefit is that a batch needs no container running, not speed.
+
+### The embedder, and a trap worth knowing
+`docker inspect tei` shows `--model-id BAAI/bge-small-en-v1.5`. That is what built the three 384-dim Qdrant
+collections. `all-MiniLM-L6-v2` is also 384-dim and cached on this host, so using it against those
+collections would return **confidently ranked nonsense** -- cosine is defined between any two vectors of
+equal length, and it says nothing about whether they share a space. Same class of error as reading a logit
+as a probability.
+
+### Contradictions decide instead of vanishing
+The measured gap was that the cross-encoder *discards* contradicting passages (4/5 below threshold, merged
+with off-topic). `numeric_conflict.py` closes it with an exact rule:
+```
+contradicting passages flagged : 4/5   (named, with both values)
+supporting or off-topic flagged: 0/10
+missed: semantic contradiction with no numbers -- stays ESCALATE
+```
+Wired into the pipeline, this makes **DROP reachable from evidence**, which it was not before:
+```
+contradicting number               -> DROP      numeric_conflict
+supporting / off-topic passage     -> ESCALATE
+semantic contradiction, no numbers -> ESCALATE
+```
+
+### On training a reranker in 10 minutes -- priced rather than dismissed
+The free labels an oracle can generate (mutate a number, flip a negation) teach a model to reproduce what
+`sympy` already does at zero error across eight decidable kinds. The labels that would add capability are
+real prose contradictions, which need human judgement, and we have none. Training now would also mean
+evaluating on constructed data -- the circular-evidence defect this project already names as its biggest
+weakness. **Compute is not the binding constraint; labels are.** A model becomes worth training when there
+is judged data to train it on.
+
+### Bugs found by measuring, in code written minutes earlier
+1. A greedy optional group before a constrained one matched "330 metres tall" as unit="tall", so the
+   contradiction was never extracted -- and the regex *succeeded*, so nothing backtracked.
+2. Digit-only extraction missed "two premises" vs "three premises". Prose writes counts as words.
+3. I wired the decider to the low band, assuming that is where contradictions land. **Measured: "1.609344
+   km" vs "1.5 km" scores 0.867, above threshold**, because contradicting a claim is a way of being
+   on-topic. It arrives in `sufficient`. The decider now runs on all candidates.
+4. `cand["text"]` then raised KeyError (`all` entries carry `index`, only `low_band` carries `text`) and a
+   `break` on exception silently disabled the entire refutation path.
+
+### Honest limits
+- 5 triples, hand-written, and the one missed contradiction is the semantic kind. 4/5 is illustrative of the
+  mechanism, not a rate over a corpus.
+- `onnx_rerank` loads 569.7 MB per process; it is not free in a short-lived script.
+- **Retrieval is still missing.** The 18,852-point `lair-code` collection needs `bge-small-en-v1.5` on the
+  host, which is not yet downloaded. Lexical candidate selection plus cross-encoder rerank is what exists.
+- **No clean held-out set.** Still the largest defect.
