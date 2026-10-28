@@ -107,6 +107,13 @@ def check_structure(text: str, kind: str = "text") -> dict:
 
 
 # -------------------------------------------------------------------- layer 2: semantic
+MODULE_DUNDERS = {
+    "__name__", "__file__", "__doc__", "__all__", "__spec__", "__loader__", "__package__",
+    "__builtins__", "__annotations__", "__dict__", "__path__", "__version__", "__author__",
+    "__qualname__", "__module__", "__class__", "__slots__", "__weakref__", "__cached__",
+}
+
+
 def check_semantics(code: str) -> dict:
     """Internal coherence for Python, using the interpreter's own symbol table.
 
@@ -115,46 +122,83 @@ def check_semantics(code: str) -> dict:
     semantic failure requiring no world knowledge.
 
     What it CANNOT do: tell you the programme computes the right thing.
+
+    BUG THIS FIXED, measured on 400 real stdlib files: the first version reported a 77.25% flag rate and
+    every example was a builtin (`open`, `print`, `len`, `str`, `ImportError`, `object`). The builtin test
+    was `hasattr(__builtins__, name) or name in dir(__builtins__)`, but `__builtins__` inside a module is
+    a DICT, so `dir()` on it returns dict methods and every builtin looked undefined. A gate that rejects
+    three quarters of real code is worse than no gate, and it took real data to reveal it -- the
+    hand-written snippets all used types that happened to be bound in scope.
     """
+    import builtins
+
     issues: list[str] = []
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return {"ok": False, "issues": ["cannot parse; semantic layer skipped"], "layer": "semantic"}
 
+    # a star-import makes the name set unknowable, so the check must decline rather than guess
+    if any(isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names)
+           for n in ast.walk(tree)):
+        return {"ok": None, "issues": ["star-import present; bound names are not statically known"],
+                "layer": "semantic"}
+
+    # DYNAMIC BINDING is invisible to symtable. Measured: of the 1.75% of real stdlib files this gate
+    # flagged, every example was `globals()[name] = ...` -- dis.COMPILER_FLAG_NAMES, turtle's re-exports.
+    # The names ARE bound, just not statically. Flagging them would be a false positive, so the gate
+    # declines instead. One in a hundred false positives is tolerable; seven in four hundred is a gate
+    # people learn to ignore.
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "globals"):
+            return {"ok": None,
+                    "issues": ["globals() used; names may be bound dynamically and symtable cannot see it"],
+                    "layer": "semantic"}
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in ("exec", "eval", "setattr", "vars")):
+            return {"ok": None,
+                    "issues": [f"{n.func.id}() used; name binding is dynamic"],
+                    "layer": "semantic"}
+
     try:
         st = symtable.symtable(code, "<snippet>", "exec")
     except SyntaxError:
         return {"ok": False, "issues": ["symtable rejected the source"], "layer": "semantic"}
 
+    declared_global = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Global):
+            declared_global.update(n.names)
+
     def walk(table, bound: set) -> None:
         local = bound | {s.get_name() for s in table.get_symbols()
                          if s.is_assigned() or s.is_parameter() or s.is_imported()}
         for s in table.get_symbols():
-            if s.is_global() and not s.is_assigned() and s.get_name() not in local:
-                # referenced but never bound anywhere in this scope; could be a builtin, so check
-                if not hasattr(__builtins__, s.get_name()) and s.get_name() not in dir(__builtins__):
-                    issues.append(f"name {s.get_name()!r} used but never bound")
+            nm = s.get_name()
+            if s.is_global() and not s.is_assigned() and nm not in local:
+                if (hasattr(builtins, nm) or nm in MODULE_DUNDERS
+                        or nm in declared_global):
+                    continue
+                issues.append(f"name {nm!r} used but never bound")
         for child in table.get_children():
             walk(child, local)
 
     try:
         walk(st, set())
     except Exception:                                     # noqa: BLE001 - analysis must not crash triage
-        pass
+        return {"ok": None, "issues": ["symbol analysis failed; declining to judge"],
+                "layer": "semantic"}
 
-    # a trivially self-contradictory assignment chain: x = 3 then x = 8 with nothing in between
-    assigns: dict[str, list] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name) and isinstance(node.value, ast.Constant):
-                    assigns.setdefault(t.id, []).append(node.value.value)
-    for name, vals in assigns.items():
-        if len(vals) >= 2 and len(set(map(str, vals))) > 1 and len(vals) == len(set(map(str, vals))):
-            issues.append(f"{name!r} rebound to {len(set(map(str, vals)))} distinct constants "
-                          f"with no intervening use")
-
+    # --- NO REBOUND-CONSTANT CHECK, and this is a deliberate removal rather than an omission.
+    # Measured on 400 real stdlib files: a heuristic that flagged "name rebound to N distinct constants
+    # with no intervening use" reported a 28.5% flag rate, and EVERY example was ordinary Python --
+    # `offset`, `mapping`, `eof`, `menu_status` assigned in different branches or loop iterations. That is
+    # legal and idiomatic; it is not self-contradiction.
+    #
+    # The reviewer's example (`x = 3 ... therefore x = 8`) is a defect in a REASONING chain, not in Python
+    # source. Treating a language feature as a contradiction detector produced a false-positive rate of
+    # roughly one in three real files. `logic/smt.py` is where contradictions belong, expressed as actual
+    # constraints rather than inferred from reassignment.
     return {"ok": not issues, "issues": issues[:5], "layer": "semantic"}
 
 
@@ -396,12 +440,33 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] semantic layer catches an unbound name that parses fine "
           f"({sem['issues'][:1]})")
 
-    # --- the reviewer's example: x=3 then x=8 is parsable and internally broken
-    contradiction = "x = 3\ny = x + 1\nx = 8\nprint(y)"
-    sem = check_semantics(contradiction)
-    good = any("rebound" in i for i in sem["issues"])
+    # --- REGRESSION, found on 400 real stdlib files: the first builtin test used `__builtins__`, which is
+    #     a DICT inside a module, so `dir()` gave dict methods and every builtin looked undefined. The gate
+    #     reported 77.25% of real files as broken and every example was `open`/`print`/`len`.
+    r = check_semantics("print(len([open('x').read()]))")
+    good = r["ok"] is True
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] semantic layer flags a rebound chain (x=3 ... x=8)")
+    print(f"  [{'PASS' if good else 'FAIL'}] builtins are not flagged as unbound (the 77% bug)")
+
+    # --- REGRESSION: ordinary reassignment is NOT a contradiction. `x=3` then `x=8` is legal Python and
+    #     a rebound heuristic that flagged it reported 28.5% of real files.
+    r = check_semantics("def f(flag):\n    if flag:\n        x = 3\n    else:\n        x = 8\n"
+                        "    return x\n")
+    good = r["ok"] is True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] branch reassignment is not a contradiction (the 28.5% bug)")
+
+    # --- a star-import makes the name set unknowable, so the gate must DECLINE, not pass and not fail
+    r = check_semantics("from os.path import *\nprint(join('a', 'b'))\n")
+    good = r["ok"] is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a star-import yields None (declines to judge)")
+
+    # --- and a genuinely unbound name is still caught after all of the above
+    r = check_semantics("def f():\n    return qqq + 1\n")
+    good = r["ok"] is False
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] ...while a genuinely unbound name is still caught")
 
     # --- LAYER 3 refuses to decide truth
     t = check_truth("2 + 2 = 5")
@@ -418,7 +483,7 @@ def run_self_test() -> bool:
     print(f"  --- the reviewer's three failure examples ---")
     demos = (
         ("syntax   ') x if 4 ('", ") x if 4 (", "code"),
-        ("semantic 'x=3 -> x=8'", "x = 3\ny = x + 1\nx = 8\n", "code"),
+        ("semantic unbound name", "def f():\n    return qqq + 1\n", "code"),
         ("truth    '2+2=5' as code", "2 + 2 = 5", "code"),
         ("truth    'two plus two is five' as prose",
          "Two plus two equals five, so the total count is five.", "text"),
