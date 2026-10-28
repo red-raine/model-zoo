@@ -59,6 +59,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("triage.py", False),
     ("audit.py", False),
     ("code_refinery.py", False),
+    ("code_exec.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
