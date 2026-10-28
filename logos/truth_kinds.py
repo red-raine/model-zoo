@@ -52,7 +52,8 @@ _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from logos.verify.math_core import (CAPABILITIES, check_derivative, check_determinant,  # noqa: E402
+from logos.verify.math_core import (CAPABILITIES, UNKNOWN, VERIFIED,  # noqa: E402
+                                    check_derivative, check_determinant,
                                     check_identity, check_integral, check_matrix_product,
                                     check_numeric_constant, check_solution,
                                     check_unit_conversion)
@@ -251,6 +252,22 @@ def validate(claim: str) -> dict:
         v = check_numeric_constant(claim)
     elif kind == "unit_conversion":
         v = check_unit_conversion(claim)
+    elif kind == "arithmetic":
+        # ROUTING IS NOT VALIDATION. The first version returned "ROUTED" for arithmetic and pointed at
+        # verify/math_verify.py without calling it, so `2 + 2 = 5` came back UNKNOWN and was ESCALATEd to a
+        # model -- the single largest decidable class in any dataset, handed to the most expensive
+        # instrument. It is now called directly.
+        try:
+            from verify.math_verify import verify_text as _verify_arith
+        except Exception:                                    # noqa: BLE001
+            try:
+                from tools.verify.math_verify import verify_text as _verify_arith
+            except Exception:                                # noqa: BLE001
+                return {"kind": kind, "decidable": True, "verdict": UNKNOWN,
+                        "detail": "arithmetic validator unavailable", "classification": c}
+        r = _verify_arith(claim)
+        v = type("V", (), {"status": r.get("verdict", UNKNOWN),
+                           "detail": str(r.get("reason", r.get("detail", "")))[:160]})()
     elif kind == "logical":
         v = None
         return {"kind": kind, "decidable": True, "verdict": "ROUTED",

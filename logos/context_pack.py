@@ -146,6 +146,57 @@ def _classify(pack: ContextPack) -> str:
     return f"code/{purity}/{spec}/{asyncness}/arity-{f.arity}"
 
 
+# ------------------------------------------------------------------------------- lemmatisation
+_WORD = re.compile(r"[A-Za-z][A-Za-z\-]{2,}")
+
+
+def normalize_terms(text: str, keep_order: bool = True) -> list[str]:
+    """Lemmatise to a canonical form so ontology lookup matches `bridges`, `bridge`, `bridged` as one term.
+
+    WHY THIS IS A SEPARATE PASS, and the user is right that it belongs in the ontology pre-research step: an
+    ontology is keyed on canonical lexical forms. Matching surface forms means `bridge`, `bridges` and
+    `bridging` are three misses instead of one hit, so the ontology looks useless when it is only unqueried.
+    Normalising ONCE, before any lookup, is far cheaper than normalising at every call site.
+
+    POS is tried noun-first then verb, because dataset nouns dominate and `running` should resolve to `run`
+    either way while `mice` only works as a noun. Falls back to the surface form when WordNet has no entry --
+    a term we cannot lemmatise is still a term.
+    """
+    words = _WORD.findall(text)
+    if not words:
+        return []
+    try:
+        from nltk.stem import WordNetLemmatizer
+        from nltk.corpus import wordnet as wn
+        lem = WordNetLemmatizer()
+
+        def canon(w: str) -> str:
+            wl = w.lower()
+            # NOUN-FIRST IS WRONG here: `running` is also a noun, so lemmatize(...,'n') returns it unchanged
+            # and the verb form `run` is never reached. Collect every POS candidate and prefer the SHORTEST
+            # one that WordNet actually knows -- `running`->run, `mice`->mouse, `analysis`->analysis.
+            cands = []
+            for pos in ("n", "v", "a", "r"):
+                c = lem.lemmatize(wl, pos)
+                has = bool(wn.synsets(c, pos))
+                cands.append((not has, len(c), c))       # synset-presence FIRST, then shortness
+            cands.sort()
+            return cands[0][2]
+    except Exception:                                     # noqa: BLE001
+        def canon(w: str) -> str:
+            return w.lower()
+
+    out: list[str] = []
+    for w in words:
+        c = canon(w)
+        if keep_order:
+            if c not in out:
+                out.append(c)
+        else:
+            out.append(c)
+    return out if keep_order else sorted(out)
+
+
 # ------------------------------------------------------------------------------- graph
 def to_graph(pack: ContextPack):
     """Emit the pack as an RDF graph. This is the 'open knowledge format' side of the idea: the context is
@@ -264,6 +315,26 @@ SELECT ?fn WHERE {{ ?s lx:hasFunction ?fn . }}"""
         good = n == len(p.functions)
         ok = ok and good
         print(f"  [{'PASS' if good else 'FAIL'}] and is queryable: {n} functions found by SPARQL")
+
+    # --- LEMMATISATION: singular/plural/verb forms collapse to one ontology key. Without this an ontology
+    #     looks useless because every surface form is a separate miss.
+    pairs = [("bridges", "bridge"), ("running", "run"), ("mice", "mouse"), ("analysis", "analysis")]
+    got = {w: normalize_terms(w)[0] for w, _want in pairs}
+    bad = [(w, got[w], want) for w, want in pairs if got[w] != want]
+    good = not bad
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] lemmatisation canonicalises surface forms "
+          f"({got})" + (f"  MISSES: {bad}" if bad else ""))
+
+    # --- dedup preserves first-seen order, so a rendered context is stable and cacheable
+    good = normalize_terms("bridges bridge bridged") == ["bridge"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] duplicate surface forms collapse to one term")
+
+    # --- text with no words yields an empty list, not a crash
+    good = normalize_terms("123 += 456") == []
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] non-word input yields no terms, no exception")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
