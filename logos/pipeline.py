@@ -58,7 +58,152 @@ def _rerank():
         return None
 
 
+# Which validators can be applied to a WHOLE ROW without argument extraction. This list is deliberately
+# short, and the reason matters: `check_identity(lhs, rhs)`, `check_derivative(expr, var, claimed)`,
+# `check_solution(equation, var, value)` and the matrix checks take 2-3 arguments, so calling them with one
+# string raises TypeError. My first version caught that and fell through, which SILENTLY reported such rows as
+# tier 3 -- the same swallowed-error sin as the numeric_conflict bootstrap, in code written minutes later.
+# So a row that no single-argument validator can examine is reported as UNCLASSIFIED with the reason, not as
+# "no oracle".
+ROW_VALIDATORS = (
+    # (name, tier_when_refuted)
+    ("check_arithmetic_text", 1),      # the left side is an expression, the right is its value
+    ("check_numeric_constant", 1),     # the constant NAME is the authority
+    ("check_unit_conversion", 2),      # BOTH sides are claims; the row does not say which is wrong
+)
+
+# validators that need more than the row text. listed so their absence is visible rather than implied.
+NEEDS_ARGUMENT_EXTRACTION = ("check_identity", "check_derivative", "check_integral",
+                             "check_solution", "check_determinant", "check_matrix_product")
+
+
+def classify_repair(row: str) -> dict:
+    """Tier, plus an account of what was NOT examined. A verdict with no such account is a guess.
+
+    TIER 1 = the validator COMPUTES the answer, so the correction is uniquely determined and one side of the
+             claim is authoritative by construction.
+    TIER 2 = the validator can only CHECK, so repairing means SEARCHING for a candidate.
+    TIER 3 = nothing in this suite can decide it.
+    UNCLASSIFIED = the applicable validators need arguments extracted from the row first, which this
+             classifier does not do. Reporting that as tier 3 conflated "no oracle" with "not attempted".
+    """
+    try:
+        from logos.verify import math_core
+    except Exception as e:                                    # noqa: BLE001
+        return {"tier": None, "reason": f"math_core unavailable ({type(e).__name__})",
+                "examined": [], "unexamined": list(NEEDS_ARGUMENT_EXTRACTION)}
+    examined, refuted_by = [], None
+    for name, tier in ROW_VALIDATORS:
+        fn = getattr(math_core, name, None)
+        if fn is None:
+            continue
+        try:
+            status = fn(row).status
+        except Exception as e:                                # noqa: BLE001
+            return {"tier": None, "reason": f"{name} raised {type(e).__name__}: {e}",
+                    "examined": examined, "unexamined": list(NEEDS_ARGUMENT_EXTRACTION)}
+        examined.append(f"{name}={status}")
+        if status == "REFUTED":
+            refuted_by = (name, tier)
+            break
+    if refuted_by is None:
+        return {"tier": 3, "reason": "no row-level validator refuted it",
+                "examined": examined, "unexamined": list(NEEDS_ARGUMENT_EXTRACTION)}
+    return {"tier": refuted_by[1], "refuted_by": refuted_by[0], "examined": examined,
+            "unexamined": list(NEEDS_ARGUMENT_EXTRACTION)}
+
+
+def _repair_tier_for(row: str) -> int:
+    """Convenience: the tier, or 3 when unclassified. Kept because callers want one number."""
+    t = classify_repair(row)["tier"]
+    return 3 if t is None else t
+
+
+def _tier1_repair(row: str) -> dict:
+    """Compute the correction when ONE side of the row is authoritative by construction.
+
+    Two shapes only, and why each is unambiguous rather than assumed:
+        `A op B = C`   the left side is a computable expression, the right is its value -> compute the left
+        `name = v`     the constant NAME is the authority, the value is an estimate -> correct the rounding
+
+    A unit conversion is deliberately NOT here. `1 mile = 1.5 km` has two competing claims and the row does
+    not say which one is wrong, so "repairing" it would be a guess wearing a proof. Measured, that is the
+    difference between a correction and an assumption.
+    """
+    try:
+        from logos.verify import math_core
+    except Exception as e:                                    # noqa: BLE001
+        return {"status": "UNAVAILABLE", "reason": f"math_core import failed: {type(e).__name__}"}
+    import re as _re
+
+    # ---- shape 1: a named constant. the NAME is authoritative, the literal is the estimate.
+    try:
+        const_refuted = math_core.check_numeric_constant(row).status == "REFUTED"
+    except Exception:                                         # noqa: BLE001
+        const_refuted = False
+    if const_refuted:
+        m = _re.match(r"^\s*([A-Za-z][A-Za-z0-9 ()\-]{0,24}?)\s*(?:=|is|\u2248|=~)\s*(\d+\.?\d*)\s*$",
+                      row)
+        if m:
+            name, literal = m.group(1).strip(), m.group(2)
+            try:
+                from logos.verify.math_core import _round_to_sf, _significant_digits
+                true_val = float(math_core.CONSTANTS[name.lower().rstrip("(").strip()]().evalf())
+                sf = _significant_digits(literal)
+                fixed = _round_to_sf(true_val, sf)
+                candidate = f"{name} = {fixed:g}"
+                if math_core.check_numeric_constant(candidate).status == "VERIFIED":
+                    return {"status": "FIXED", "candidate": candidate, "tier": 1,
+                            "validator": "check_numeric_constant",
+                            "reason": f"{name} correctly rounded to {sf} s.f. is {fixed:g}"}
+            except Exception:                                 # noqa: BLE001
+                pass
+        return {"status": "NO_ORACLE",
+                "reason": "constant claim, but the corrected rounding did not verify"}
+
+    # ---- shape 2: arithmetic. the left side is a computable expression.
+    try:
+        v = math_core.check_arithmetic_text(row)
+    except Exception as e:                                    # noqa: BLE001
+        return {"status": "VALIDATOR_RAISED", "reason": f"check_arithmetic_text: {type(e).__name__}"}
+    if v.status != "REFUTED":
+        return {"status": "NO_ORACLE",
+                "reason": f"no tier-1 validator refuted it (arithmetic {v.status})"}
+    if "=" not in row:
+        return {"status": "NO_ORACLE", "reason": "no '=' so there is no value to compute"}
+    lhs = row.split("=", 1)[0].strip()
+    if not _re.search(r"[+\-*/]|\*\*", lhs):
+        return {"status": "NOT_A_COMPUTATION",
+                "reason": f"left-hand side {lhs!r} is a bare symbol, not a computation"}
+    try:
+        import sympy
+        expr = sympy.sympify(lhs)
+        if not expr.is_number:
+            return {"status": "NO_ORACLE", "reason": "left-hand side does not evaluate to a number"}
+        value = sympy.nsimplify(expr)
+        candidate = f"{lhs} = {value}"
+    except Exception as e:                                    # noqa: BLE001
+        return {"status": "NO_ORACLE", "reason": f"could not compute: {type(e).__name__}"}
+    if candidate == row:
+        return {"status": "NO_CHANGE", "reason": "computed value equals the claimed value"}
+    vt = str(value).strip()
+    if vt == lhs.strip() or not _re.search(r"\d", vt):
+        return {"status": "TAUTOLOGY",
+                "reason": f"corrected value {vt!r} repeats the left side instead of computing a number"}
+    if math_core.check_arithmetic_text(candidate).status != "VERIFIED":
+        return {"status": "REJECTED_BY_ORACLE", "reason": f"candidate {candidate!r} does not re-verify"}
+    return {"status": "FIXED", "candidate": candidate, "tier": 1,
+            "validator": "check_arithmetic_text",
+            "reason": f"computed {candidate.split('=', 1)[1].strip()} from the left-hand side; "
+                      f"the repaired row re-verifies"}
+
+
 def _numeric_repair(row: str) -> dict:
+    """Tier-1 repair, kept as the name existing callers use. See `_tier1_repair`."""
+    return _tier1_repair(row)
+
+
+def _numeric_repair_legacy(row: str) -> dict:
     """Rewrite a refuted arithmetic row to its computed value, and only if the rewrite verifies.
 
     Deliberately narrow: `A op B = C` where C is wrong. It does not touch prose, units, algebra or code.
@@ -171,18 +316,21 @@ def guess_kind(row: str) -> str:
 
 
 def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None,
-                 gate_threshold: float = 0.5, repair_policy: str = "drop") -> dict:
+                 gate_threshold: float = 0.5, repair_policy: str = "auto") -> dict:
     """One row, all the way through. Returns the disposition plus the reason for it.
 
     Every branch that can change the disposition is recorded in `why`, so a verdict can be audited
     without rerunning it. A disposition with no recorded reason would be an assertion, not a decision.
 
     `repair_policy` decides what happens to a REFUTED arithmetic row:
-        "drop"   (default) the row is rejected. A repair would emit a value the source never contained, and
-                 a row nobody wrote cannot be verified against its provenance -- for a training corpus that
-                 is fabrication, so the safe default is rejection.
-        "repair" the row is corrected and MARKED altered, for callers where the left-hand side is
-                 authoritative and the value is derived (a live calculation, not a corpus).
+        "auto"   (default) TIER 1 is repaired and flagged `alteration={"kind": "math_fix", ...}`; everything
+                 else is dropped. Tier 1 means a validator COMPUTED the answer and one side of the claim is
+                 authoritative by construction (`2 + 2 = 5` -> `2 + 2 = 4`; `pi = 3.2` -> `pi = 3.1`).
+                 Tier 2+ means the correction would be a guess, which is why `1 mile = 1.5 km` is NOT
+                 repaired: the row does not say which side is wrong.
+        "drop"   never repair, for callers that must not receive altered text at all.
+        "repair" attempt tier 1 even on rows classified above it, for a caller who has external reason to
+                 trust one side. The alteration flag is emitted either way.
     """
     kind = kind or guess_kind(row)
     why: list = []
@@ -202,6 +350,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
         return {"row": row[:200], "kind": kind, "disposition": DROP, "refuted_by": "empty",
                 "cost": 0.0, "n_findings": 0, "gated": False, "gate_sufficient": None,
                 "low_band": 0, "flags": [], "skipped": [], "findings": [],
+                "repaired": None, "altered": False, "alteration": None,
                 "why": [f"kind={kind}", "row is blank or whitespace -- nothing to evaluate"]}
 
     rv = row_eval.execute(row, kind=kind)
@@ -212,18 +361,38 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
 
         # ---- REPAIR: the one branch that keeps a refuted row instead of dropping it. Narrow by
         # design -- only arithmetic -- and only if the corrected row re-passes the same validator.
-        if rv.refuted_by == "math" and repair_policy == "repair":
+        if rv.refuted_by == "math" and repair_policy in ("repair", "auto"):
+            cls = classify_repair(row)
+            may_repair = repair_policy == "repair" or cls["tier"] == 1
+            if not may_repair:
+                why.append(f"not repaired: tier {cls['tier']} (refuted by {cls.get('refuted_by')}), and "
+                           f"tier>1 means the correction is a GUESS rather than a computation -- "
+                           f"e.g. '1 mile = 1.5 km' gives no way to know which side is wrong")
+                return {"row": row[:200], "kind": kind, "disposition": DROP,
+                        "refuted_by": rv.refuted_by, "cost": round(rv.total_cost, 3),
+                        "repaired": None, "altered": False, "alteration": None,
+                        "n_findings": len(findings), "gated": False, "gate_sufficient": None,
+                        "low_band": 0, "flags": [], "skipped": rv.skipped, "why": why,
+                        "findings": [f.as_dict() for f in findings]}
             rep = _numeric_repair(row)
             if rep["status"] == "FIXED":
                 disposition = REPAIR
-                why.append(f"REPAIR: {rep['reason']}")
+                why.append(f"REPAIR (tier {rep.get('tier', 1)}): {rep['reason']}")
                 why.append("ALTERED: this text is not what the source said; a repaired row must never be "
                            "presented as an original")
+                alteration = {
+                    "kind": "math_fix",
+                    "tier": int(rep.get("tier", 1)),
+                    "validator": rep.get("validator", ""),
+                    "original": row,
+                    "repaired": rep["candidate"],
+                    "oracle_recheck": "VERIFIED",
+                }
                 return {"row": row[:200], "kind": kind, "disposition": REPAIR,
                         "refuted_by": rv.refuted_by, "cost": round(rv.total_cost, 3),
                         "n_findings": len(findings), "gated": False, "gate_sufficient": None,
                         "low_band": 0, "flags": [], "skipped": rv.skipped, "repaired": rep["candidate"],
-                        "altered": True, "why": why,
+                        "altered": True, "alteration": alteration, "why": why,
                         "findings": [f.as_dict() for f in findings]}
             why.append(f"no repair available: {rep['status']}: {rep['reason'][:80]}")
         elif rv.refuted_by == "math":
@@ -252,6 +421,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
     gate = None
     gated = False
     flags: list = []
+    alteration = None
     refuter = rv.refuted_by
     if evidence:
         rc = _rerank()
@@ -309,6 +479,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
 
     return {"row": row[:200], "kind": kind, "disposition": disposition,
             "refuted_by": refuter, "cost": round(rv.total_cost, 3), "repaired": None, "altered": False,
+            "alteration": None,
             "n_findings": len(findings), "gated": gated,
             "gate_sufficient": (gate or {}).get("sufficient"),
             "low_band": len((gate or {}).get("low_band") or []), "flags": flags,
@@ -339,13 +510,15 @@ FIXTURE = [
     ("def add(a, b):\n    return a + b\n", KEEP, "code"),
     ("def area(r):\n    return 3.14159 * r * r\n", KEEP, "code"),
     # ---- should DROP: decidable and wrong
-    ("pi = 3.0", DROP, "text"),
     ("1 mile = 1.5 km", DROP, "text"),
     ("def f():\n    return qqq + 1\n", DROP, "code"),
     ("def g(:\n    return 1\n", DROP, "code"),
-    # ---- should DROP: wrong. Repair is available but not the default -- see the policy note.
-    ("2 + 2 = 5", DROP, "text"),
-    ("7 * 6 = 41", DROP, "text"),
+    # ---- should REPAIR: tier-1, the correction is COMPUTED and uniquely determined
+    ("2 + 2 = 5", REPAIR, "text"),
+    ("7 * 6 = 41", REPAIR, "text"),
+    # a wrong ROUNDING of a constant is recoverable too: 2 s.f. of pi is 3.1, so the row is fixed rather
+    # than discarded. This row used to be DROPped; the precision work turned it into a repair.
+    ("pi = 3.0", REPAIR, "text"),
     # ---- prose: no computational check applies, so these are the honest hard cases
     ("A categorical syllogism has two premises and a conclusion.", ESCALATE, "text"),
     ("Apoptosis is programmed cell death.", ESCALATE, "text"),
@@ -455,13 +628,22 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] 2 + 2 = 4 -> {r['disposition']}")
 
-    # --- DEFAULT: a refuted claim is REJECTED, not rewritten. Rewriting would emit a value the source
-    #     never contained, which for a training corpus is fabrication.
+    # --- DEFAULT ("auto"): tier-1 is REPAIRED and FLAGGED. `2 + 2` has exactly one right answer and a
+    #     machine computes it, so discarding it loses a fixable row. The flag is what makes that safe.
     r = evaluate_row("2 + 2 = 5", kind="text")
-    good = r["disposition"] == DROP and r["refuted_by"] == "math" and not r["altered"]
+    good = (r["disposition"] == REPAIR and r["altered"] is True
+            and (r["alteration"] or {}).get("kind") == "math_fix"
+            and (r["alteration"] or {}).get("tier") == 1
+            and (r["alteration"] or {}).get("repaired") == "2 + 2 = 4")
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] by default 2 + 2 = 5 -> {r['disposition']} "
-          f"(rejected, not rewritten)")
+    print(f"  [{'PASS' if good else 'FAIL'}] by default 2 + 2 = 5 -> {r['disposition']} with a "
+          f"math_fix flag {r['alteration']}")
+
+    # --- a caller that must not receive altered text can turn it off entirely
+    r = evaluate_row("2 + 2 = 5", kind="text", repair_policy="drop")
+    good = r["disposition"] == DROP and not r["altered"] and r["alteration"] is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] repair_policy='drop' refuses to rewrite -> {r['disposition']}")
 
     # --- OPT-IN: a caller that owns the left-hand side can ask for the correction, and it is MARKED
     r = evaluate_row("2 + 2 = 5", kind="text", repair_policy="repair")
@@ -479,12 +661,12 @@ def run_self_test() -> bool:
             print(f"  [FAIL] a blank row ({blank!r}) was KEPT")
     print(f"  [{'PASS' if ok else 'FAIL'}] blank rows are never KEPT")
 
-    # --- REPAIR is now reachable, which it was not: row_eval assigns it nowhere.
-    r = evaluate_row("2 + 2 = 5", kind="text", repair_policy="repair")
-    good = r["disposition"] == REPAIR and r.get("repaired") == "2 + 2 = 4"
+    # --- REPAIR is reachable, which it was not: row_eval assigns it nowhere.
+    r = evaluate_row("7 * 6 = 41", kind="text")
+    good = r["disposition"] == REPAIR and r.get("repaired") == "7 * 6 = 42"
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] REPAIR is reachable by policy and produces "
-          f"{r.get('repaired')!r} (it was unreachable before)")
+    print(f"  [{'PASS' if good else 'FAIL'}] REPAIR is reachable and produces {r.get('repaired')!r} "
+          f"(row_eval never assigns REPAIR at all)")
 
     # --- and the repaired text must itself verify. a repair nobody can check is a guess.
     if r.get("repaired"):
@@ -501,13 +683,25 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] a unit refutation is {r['disposition']}, "
           f"not silently rewritten to a bare number")
 
-    # --- GUARD 1: a bare-symbol claim is NOT repaired into a tautology. This was a real bug: the
-    #     first version rewrote `pi = 3.0` to `pi = pi`, which verifies and deletes the claim.
+    # --- THE TAUTOLOGY INVARIANT, asserted generically. The bug that started this was `pi = 3.0` being
+    #     "repaired" to `pi = pi`, which verifies and deletes the claim. Now `pi = 3.0` is repaired to
+    #     `pi = 3.1` -- a real correction -- and the invariant is that NO repair ever emits X = X.
     r = evaluate_row("pi = 3.0", kind="text")
-    good = r["disposition"] == DROP and not r.get("repaired")
+    good = r["disposition"] == REPAIR and r.get("repaired") == "pi = 3.1"
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] pi = 3.0 is {r['disposition']}, not 'repaired' to pi = pi "
-          f"(the tautology bug)")
+    print(f"  [{'PASS' if good else 'FAIL'}] pi = 3.0 is repaired to {r.get('repaired')!r} "
+          f"(2 s.f. of pi is 3.1)")
+
+    taut = []
+    for probe in ("2 + 2 = 5", "7 * 6 = 41", "pi = 3.0", "pi = 3.2", "3 * 4 = 11"):
+        cand = _tier1_repair(probe)
+        if cand.get("status") == "FIXED":
+            l, rr = cand["candidate"].split("=", 1)
+            if l.strip() == rr.strip():
+                taut.append(cand["candidate"])
+    good = not taut
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] no repair ever emits X = X (tautologies: {taut or 'none'})")
 
     # --- GUARD 2, directly: an echo is refused even though it verifies. Guard 1 catches `pi = 3.0`
     #     before guard 2 is reached, so exercise the echo rule on its own.
@@ -519,13 +713,14 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] a computation yields a numeric literal ({echo} -> {vt}), "
           f"which is what guard 2 requires")
 
-    rep = _numeric_repair("pi = 3.0")
-    good = rep["status"] == "NOT_A_COMPUTATION"
+    # a bare symbol that is NOT a known constant has no authority at all, so nothing is repaired
+    rep = _tier1_repair("gamma = 3.0")
+    good = rep["status"] != "FIXED"
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] guard 1 fires first on a bare symbol ({rep['status']})")
+    print(f"  [{'PASS' if good else 'FAIL'}] an unknown constant is not 'repaired' ({rep['status']})")
 
     # --- a correct row is untouched by either policy
-    for pol in ("drop", "repair"):
+    for pol in ("drop", "auto", "repair"):
         r = evaluate_row("2 + 2 = 4", kind="text", repair_policy=pol)
         good = r["disposition"] == KEEP and not r["altered"]
         ok = ok and good

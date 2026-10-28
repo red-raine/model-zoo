@@ -396,7 +396,14 @@ def check_arithmetic_equality(lhs: str, rhs: str, tolerance: float = 0.0) -> Ver
     if a.free_symbols or b.free_symbols:
         return Verdict(UNKNOWN, "arithmetic",
                        f"not a numeric claim: free symbols {sorted(map(str, a.free_symbols | b.free_symbols))}")
-    diff = sympy.simplify(a - b)
+    try:
+        diff = sympy.simplify(a - b)
+    except Exception as e:                                 # noqa: BLE001
+        # A VALIDATOR MUST NEVER RAISE; it returns UNKNOWN. Measured: `gamma = 3.0` parses `gamma` as a
+        # sympy FunctionClass, whose free_symbols is empty so the guard above passes, and then `a - b`
+        # raises TypeError -- taking the whole pipeline down on any row naming a function sympy knows.
+        # Fail-closed means UNKNOWN is a RETURN, never a traceback.
+        return Verdict(UNKNOWN, "arithmetic", f"could not compare symbolically: {type(e).__name__}")
     if diff == 0:
         return Verdict(VERIFIED, "arithmetic", f"{lhs} = {rhs} exactly", value=float(a.evalf()))
     try:
@@ -522,6 +529,27 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] pi = 22/7 parses and is REFUTED as an exact claim "
           f"(rel_err {float(22 / 7 - 3.141592654) / 3.141592654:.2e})")
+
+    # --- A VALIDATOR MUST NEVER RAISE. It returns UNKNOWN. Names that sympy knows as functions (gamma,
+    #     beta, zeta) used to take the pipeline down with a TypeError.
+    hostile = ["gamma = 3.0", "beta = 2", "zeta = 1.5", "=", "== 4", "2 +", "lambda = 3",
+               "a" * 400 + " = 1", "pi = ", "2 + 2 = ", "\x00 = 1"]
+    raised = []
+    for h in hostile:
+        for fn_name in ("check_arithmetic_text", "check_numeric_constant", "check_unit_conversion"):
+            fn = globals().get(fn_name)
+            if fn is None:
+                continue
+            try:
+                v = fn(h)
+                if getattr(v, "status", None) not in (VERIFIED, REFUTED, UNKNOWN):
+                    raised.append(f"{fn_name}({h[:12]!r}) -> bad status")
+            except Exception as e:                          # noqa: BLE001
+                raised.append(f"{fn_name}({h[:12]!r}) raised {type(e).__name__}")
+    good = not raised
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] no validator raises on {len(hostile)} hostile inputs "
+          f"({raised[:2] if raised else 'clean'})")
 
     good = check_numeric_constant("pi = 3.2").status == REFUTED
     ok = ok and good

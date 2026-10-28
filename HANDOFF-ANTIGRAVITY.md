@@ -453,3 +453,51 @@ what surfaced each one.
 numeric_conflict still fires on 3.5% of real pairs; on prose it can now only raise a flag, never a drop.
 **No held-out labelled set.** Unchanged, and now the single thing between these measurements and an accuracy
 claim.
+
+---
+
+### TIERED REPAIR: COMPUTED CORRECTIONS ARE WORTH KEEPING (2026-10-28)
+
+#### The objection that changed the design
+I had made `2 + 2 = 5` a DROP, arguing a repair fabricates a row the source never contained. The correction
+is right: the danger was never the CORRECTION, it was an UNMARKED correction rewriting provenance. Flag it and
+basic arithmetic is worth keeping -- `2 + 2 = 5` has exactly one right answer and a machine computes it.
+
+#### The tier boundary is NOT `basic maths vs calculus`
+Measured: `d/dx x^2 = 2` is REFUTED and the engine already returns the true value `2*x`, so calculus is
+computed just as exactly as arithmetic. And `a^2 + b^2 = c^2` is REFUTED as an IDENTITY -- correctly, since
+it holds only GIVEN a right triangle: the missing piece is a PREMISE, and adding premises is authoring.
+The line that matters is COMPUTE vs CHECK:
+`
+TIER 1  computed, one side authoritative by construction  -> repair + math_fix flag
+TIER 2  check-only, so repairing means guessing which side -> drop
+TIER 3  no oracle                                        -> drop
+2 + 2 = 5        tier 1 -> "2 + 2 = 4"
+pi = 3.2         tier 1 -> "pi = 3.1"
+pi = 3.0         tier 1 -> "pi = 3.1"    <- this row used to be DROPped
+1 mile = 1.5 km  tier 2 -> DROP           both sides are claims
+a^2 + b^2 = c^2  tier 3 -> DROP           the missing piece is a premise, not a value
+`
+repair_policy: `auto` (default) | `drop` | `repair`. Every repair emits
+`alteration={"kind":"math_fix","tier":1,"validator":...,"original":...,"repaired":...}`.
+
+#### Two bugs, one of them mine and minutes old
+1. `classify_repair` called every validator with one row string, but `check_identity`/`check_derivative`
+   take 2-3 arguments -- the TypeError was caught and the row reported as TIER 3, conflating "no oracle" with
+   "not attempted". Same swallowed-error sin as the numeric_conflict bootstrap, in brand-new code. Now returns
+   `examined` and `unexamined` so a tier-3 verdict is auditable.
+2. `gamma = 3.0` parses as a sympy FunctionClass whose free_symbols is empty, so the guard passed and
+   `a - b` raised TypeError -- taking the pipeline down. **A validator must never raise; fail-closed means
+   UNKNOWN is a RETURN.** Fixed, plus a blanket test over 11 hostile inputs.
+
+#### Re-verified on the real corpus
+`
+200 curated AVeriTeC claims: KEEP 0 | REPAIR 0 | ESCALATE 200 | DROP 0
+0.00% false drops, 0.00% false repairs
+`
+Repair correctly never fires on prose -- those rows are tier 3.
+
+#### Limits
+Tier 1 is narrow on purpose. Unit conversion is deliberately tier 2. The `math_fix` flag is only as good as
+its consumers: a job that ignores `alteration` will train on corrected rows as originals. Coverage on prose
+is unchanged at 0% -- this makes decidable rows survive instead of being discarded.
