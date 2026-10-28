@@ -339,3 +339,50 @@ ThinkingCap compresses traces (10K -> 1.3K chars); it does not verify logic.
 - ms-marco-MiniLM is trained for MS MARCO ranking and truncates at 512 tokens -- it cannot see our long rows.
 - the 1.2B throughput anomaly is unexplained and may indicate a bad build rather than a bad model.
 - **No held-out labelled set.** Every model decision above is contingent on that gap being fixed.
+
+
+---
+
+## Update 2026-10-28 (d) -- local LLM as decider: measured, degenerate
+
+### The third-party evidence, read for what it is
+modeltested.com's thread: 56 situations / 112 questions, local LLMs beating 14 commercial "decision models"
+(Qwen3.5-9B 97.3%, Granite 4.2 8B 97.4% on hard cases; Jev 78.9, Clef 73.7, Clef Flash 68.4).
+Two things matter for us:
+- their test **states the rules in the prompt** and grades multiple choice, so it measures policy
+  APPLICATION, not fact verification -- which is half of what our dispositions need
+- the decision models fail exactly on "reading a rule carefully and doing a little math", which is our
+  numeric-contradiction case and is already decided exactly by `numeric_conflict` + `math_core`
+**Their hard-case column independently endorses the architecture we arrived at by measurement.**
+
+### New module: `logos/llm_decider.py`
+Runs the same ten rows through a persistent `llama-server`, temperature 0, and compares against the pipeline:
+```
+LLM accuracy      3/10
+majority baseline 3/10  (always answer 'KEEP')
+pipeline accuracy 10/10
+distinct labels the LLM produced: 1 ['KEEP']
+LLM median        2,178 ms/row      encoder 10.2 ms/row  (214x)
+```
+**One label for every row.** Its 3/10 is the class prior, not skill -- a two-line script printing `KEEP`
+scores identically. The first run reported 3/6 = 0.50 on six rows containing three KEEPs, which is correct
+arithmetic pointing at nothing. **A majority-class baseline now prints beside every accuracy figure, and
+"distinct labels produced" is a first-class output.**
+
+### What it does not prove
+Collapsing to the majority class is precisely what supervised fine-tuning repairs, so this is not evidence
+that fine-tuning would fail. What it shows: an off-the-shelf 2.6B carries no information about our rows,
+reaches that state by answering INSTANTLY instead of reasoning, and the instant path still costs
+**6 hours per 10,000 rows** to emit a constant.
+
+### Correction to an earlier estimate
+I priced an LLM decision at ~75 s/row from a reasoning budget (~208 h/10k). Measured it is **2.2 s**, because
+it does not reason. So 850x was the price of reasoning and 214x is the price of not reasoning -- and they
+trade exactly the way the thread documents: cheap decision models lose on hard cases.
+
+### Honest limits
+- 10 rows, labels written by me.
+- a 2.6B is not their 9B. A 9B would likely score higher; on this CPU it would run near 2.5 tok/s.
+- if this path is pursued, **any evaluation without the majority-class baseline will report ~30% for a
+  constant and look like progress.**
+- NO HELD-OUT SET. The model collapses for want of the labels that would fix it.
