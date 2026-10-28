@@ -114,7 +114,40 @@ def argus_rerank(query: str, texts: list) -> list:
     return res
 
 
-BACKENDS = {"tei": tei_rerank, "argus": argus_rerank}
+_MINILM = None
+
+
+def minilm_rerank(query: str, texts: list) -> list:
+    """19M cross-encoder on CPU. Measured 10.2 ms/pair at AUC 0.985, which beat the 568M arms.
+
+    Loaded lazily and cached: a 19M model is cheap but not free, and importing torch for a caller that
+    never reranks would be worse than the wait.
+    """
+    global _MINILM
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    if _MINILM is None:
+        name = "cross-encoder/ms-marco-MiniLM-L-4-v2"
+        tok = AutoTokenizer.from_pretrained(name)
+        mdl = AutoModelForSequenceClassification.from_pretrained(name).eval()
+        _MINILM = (tok, mdl)
+    tok, mdl = _MINILM
+    out = []
+    for i, t in enumerate(texts):
+        with torch.no_grad():
+            enc = tok(query, t, return_tensors="pt", truncation=True, max_length=512)
+            raw = float(mdl(**enc).logits.reshape(-1)[0])
+        out.append({"index": i, "prob": sigmoid(raw), "raw": raw, "scale": "logit",
+                    "truncated": enc["input_ids"].shape[1] >= 512})
+    return out
+
+
+BACKENDS = {"minilm": minilm_rerank, "tei": tei_rerank, "argus": argus_rerank}
+
+# the measured winner. "tei" is float32 and costs 2.8 s/pair -- keep it for cross-checking a
+# suspect score, never as the default.
+DEFAULT_BACKEND = os.environ.get("LOGOS_RERANK_BACKEND", "minilm")
 
 
 def health() -> dict:
@@ -140,8 +173,9 @@ def health() -> dict:
     return h
 
 
-def rerank(query: str, texts: list, backend: str = "tei") -> list:
+def rerank(query: str, texts: list, backend: str = "") -> list:
     """Rank passages for one query. Returns probabilities, whatever the backend emits."""
+    backend = backend or DEFAULT_BACKEND
     if backend not in BACKENDS:
         raise KeyError(f"unknown backend {backend!r}; have {sorted(BACKENDS)}")
     return sorted(BACKENDS[backend](query, texts), key=lambda r: -r["prob"])
@@ -149,7 +183,7 @@ def rerank(query: str, texts: list, backend: str = "tei") -> list:
 
 # ------------------------------------------------------------------------------- the gate
 def evidence_sufficient(query: str, passages: list, threshold: float = 0.5,
-                        backend: str = "tei") -> dict:
+                        backend: str = "") -> dict:
     """Is there ANY passage that clears the relevance bar?
 
     This is the only thing the pipeline is allowed to use a reranker for. It answers "do we have evidence
@@ -159,6 +193,7 @@ def evidence_sufficient(query: str, passages: list, threshold: float = 0.5,
     Fail-closed: an unreachable backend returns sufficiency=None, which the caller must treat as UNKNOWN
     rather than as "no evidence" (same distinction as 429-is-alive vs 409-is-proxy-broken).
     """
+    backend = backend or DEFAULT_BACKEND
     if not passages:
         return {"sufficient": False, "reason": "no candidate evidence", "top": None,
                 "low_band": [], "backend": backend}
@@ -168,6 +203,7 @@ def evidence_sufficient(query: str, passages: list, threshold: float = 0.5,
         return {"sufficient": None, "reason": f"backend unreachable: {type(e).__name__}",
                 "top": None, "low_band": [], "backend": backend}
     top = ranked[0]
+    truncated = any(r.get("truncated") for r in ranked)
     # THE LOW BAND IS RETURNED, NOT SWALLOWED. Measured: 4 of 5 contradicting passages score below a
     # support threshold, and the contradiction/off-topic ordering is not reliable enough to act on (AUC
     # 0.920 with at least one inversion). So this list means "passages relevance cannot judge" and the
@@ -179,6 +215,9 @@ def evidence_sufficient(query: str, passages: list, threshold: float = 0.5,
             "reason": f"top relevance {top['prob']:.4f} vs threshold {threshold}",
             "top": {"index": top["index"], "prob": top["prob"], "text": passages[top["index"]][:160]},
             "low_band": low_band,
+            # a 512-token truncation means the score is about the FIRST HALF of the pair. that is exactly
+            # the case the cascade exists for: send it to the 568M arm, which reaches 8192.
+            "truncated": truncated,
             "all": ranked, "backend": backend}
 
 
@@ -489,6 +528,23 @@ def run_self_test() -> bool:
     good = g["sufficient"] is False
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] no candidate evidence is False, distinct from unreachable")
+
+    # --- THE CASCADE DEFAULT. evidence_sufficient must not default to the slowest arm; that default is
+    #     what made a 500-row corpus pass time out.
+    good = DEFAULT_BACKEND == "minilm"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the default backend is the measured winner ({DEFAULT_BACKEND}), "
+          f"not the 2.8 s/pair float32 service")
+
+    # --- and a truncated pair is flagged, because a 512-token score is about half the text
+    try:
+        r = rerank("a claim", ["word " * 900], backend="minilm")
+        good = r[0].get("truncated") is True
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] a passage over 512 tokens is marked truncated "
+              f"(the cascade signal)")
+    except Exception as e:                                        # noqa: BLE001
+        print(f"  [SKIP] minilm unavailable ({type(e).__name__})")
 
     # --- the low band must be RETURNED, never swallowed. This is the difference between a pipeline
     #     that can reject and one that can only abstain.

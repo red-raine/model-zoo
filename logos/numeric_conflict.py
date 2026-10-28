@@ -43,8 +43,13 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
+
+_TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
 
 # unit word -> canonical family. Only same-family numbers are ever compared, because "330 metres" and
 # "1974" are not a contradiction and treating every shared number as comparable is how a filter gets a
@@ -88,9 +93,15 @@ _WORDNUM_RE = re.compile(r"\b(" + "|".join(NUMBER_WORDS) + r")\b", re.IGNORECASE
 _NUM_RE = re.compile(r"[-+]?\d[\d,_]*\.?\d*(?:[eE][-+]?\d+)?")
 _WORD_RE = re.compile(r"[a-zA-Z%][\w%\-]*")
 
-# how many words after a number may contain its unit. small and deliberate: "330 metres tall" needs one,
-# and a wide window would let "330 people ... 5 metres" pair the wrong unit with the wrong number.
-UNIT_WINDOW = 4
+# how many words after a number may contain its unit. ONE, and measured rather than guessed: at 4, the
+# window reached across phrase boundaries and adopted "year" from "75,000 flu deaths last year in 2019",
+# turning a death toll into a duration and producing a false DROP on curated data. A measurement has a unit
+# when the unit word is next to it; anything further away belongs to another quantity.
+UNIT_WINDOW = 1
+
+# a four-digit number in this range next to a time word is almost always a DATE. Dates are labels, not
+# quantities: "1950" and "2020" are not two measurements of the same thing and must never be compared.
+YEAR_RANGE = (1000, 2100)
 
 
 def _to_float(s: str):
@@ -129,6 +140,13 @@ def extract(text: str) -> list:
                 break
         if not fam:
             continue
+        # a word-form number ("forty", "two") is a COARSE statement. It carries 1 s.f., so 40 and 42 agree.
+        word_form = bool(re.fullmatch(r"[A-Za-z]+", str(raw).strip()))
+        if word_form:
+            out_extra_precision = True
+        # a year is a date, not a measurement. skip it entirely rather than compare it to another year.
+        if fam == "time" and YEAR_RANGE[0] <= abs(val) <= YEAR_RANGE[1] and float(val).is_integer():
+            continue
 
         # normalise within a family where the conversion is certain, so 1.5 km and 1500 m compare
         if fam == "length" and unit in ("km", "kilometer", "kilometers", "kilometre", "kilometres"):
@@ -144,11 +162,12 @@ def extract(text: str) -> list:
         elif fam == "time" and unit in ("hour", "hours"):
             val, unit = val * 3600.0, "s"
         out.append({"family": fam, "value": val, "unit": unit, "raw": raw,
-                    "span": (start, end)})
+                    "span": (start, end), "word_form": word_form})
     return out
 
 
-def conflicts(claim: str, passage: str, rel_tol: float = 0.01) -> dict:
+def conflicts(claim: str, passage: str, rel_tol: float = 0.01,
+              honour_rounding: bool = True) -> dict:
     """Do the two texts state DIFFERENT values for the SAME kind of quantity?
 
     Returns the disagreements plus, deliberately, an `uncompared` list: numbers that were extracted but
@@ -157,6 +176,7 @@ def conflicts(claim: str, passage: str, rel_tol: float = 0.01) -> dict:
     """
     a = extract(claim)
     b = extract(passage)
+    rounding_errors: list = []
     found = []
     compared_a, compared_b = set(), set()
     for i, x in enumerate(a):
@@ -168,10 +188,38 @@ def conflicts(claim: str, passage: str, rel_tol: float = 0.01) -> dict:
             if x["value"] == 0 and y["value"] == 0:
                 continue
             denom = max(abs(x["value"]), abs(y["value"]), 1e-12)
-            if abs(x["value"] - y["value"]) / denom > rel_tol:
+            rel = abs(x["value"] - y["value"]) / denom
+
+            # A CORRECT ROUNDING IS NOT A CONTRADICTION. Measured false positive: "27%" against "27.63%" was
+            # flagged at rel_tol=0.01, but a claim stating 2 s.f. of 27.63 is making a rounding, not a
+            # mistake. Same defect as the absolute-tolerance check in math_core constants, same fix: ask
+            # whether the claim's value is what the passage's value ROUNDS to, not whether they are close.
+            if honour_rounding and rel > rel_tol:
+                try:
+                    from logos.verify.math_core import _round_to_sf, _significant_digits
+                    sf = 1 if x.get("word_form") else _significant_digits(x["raw"])
+                    if abs(x["value"] - _round_to_sf(y["value"], sf)) <= abs(y["value"]) * 1e-12 + 1e-15:
+                        continue                        # a correct rounding: not a conflict
+                except Exception as e:                  # noqa: BLE001
+                    # NEVER silent. an unavailable rounding check means the caller is about to see a
+                    # CONFLICT that is really an unperformed test, and that distinction has to survive.
+                    rounding_errors.append(f"{type(e).__name__}: {e}")
+
+            if rel > rel_tol:
                 found.append({"family": x["family"], "claim": x["value"], "passage": y["value"],
                               "claim_raw": x["raw"], "passage_raw": y["raw"]})
-    return {"conflict": bool(found), "disagreements": found,
+    # severity: HIGH only when both sides had an adjacent unit and the gap is big. A conflict between two
+    # bare numbers that merely happened to land in the same family is LOW, and low must never drop a row.
+    severity = "none"
+    if found:
+        strongest = max(found, key=lambda d: abs(d["claim"] - d["passage"])
+                        / max(abs(d["claim"]), abs(d["passage"]), 1e-12))
+        gap = abs(strongest["claim"] - strongest["passage"]) / max(
+            abs(strongest["claim"]), abs(strongest["passage"]), 1e-12)
+        severity = "high" if gap >= 0.05 else "low"
+
+    return {"conflict": bool(found), "severity": severity, "disagreements": found,
+            "rounding_check_errors": rounding_errors,
             "n_claim_nums": len(a), "n_passage_nums": len(b),
             "uncompared_claim": [a[i]["raw"] + " " + a[i]["unit"] for i in range(len(a))
                                  if i not in compared_a and a],
@@ -251,6 +299,47 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] '330 metres tall' extracts family=length value=330 "
           f"(the greedy-group bug yielded unit='tall', so nothing was extracted)")
+
+    # --- REGRESSION, found on 200 real AVeriTeC pairs: two YEARS are not a contradiction
+    r = conflicts("The number was 1950 in the old report.", "The figure was 2020 in the new report.")
+    good = not r["conflict"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 1950 vs 2020 (two dates) does NOT conflict")
+
+    # --- REGRESSION: "75,000 flu deaths last year in 2019" must not read as 75,000 years. The unit word
+    #     was 4 positions away and belonged to a different phrase; the window is now adjacent-only.
+    r = conflicts("America had 75,000 flu deaths in 2019.", "America had 60,000 flu deaths in 2019.")
+    good = not r["conflict"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a death toll is not read as a duration "
+          f"(adjacent-unit window)")
+
+    # --- REGRESSION: a correctly ROUNDED percentage is not a contradiction
+    # 28 IS the correct 2-s.f. rounding of 27.63; 27 is not, and flagging it is right. My first version of
+    # this test asserted 27 -- the engine was correct and I was not.
+    r = conflicts("Imports increased by 28%.", "Imports increased by 27.63%.")
+    good = not r["conflict"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 28% vs 27.63% is a correct rounding, not a conflict")
+
+    r = conflicts("Imports increased by 27%.", "Imports increased by 27.63%.")
+    good = r["conflict"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 27% vs 27.63% conflicts (27 is not the 2-s.f. rounding, 28 is)")
+
+    # --- THE CHECK MUST HAVE RUN. An unavailable rounding check used to be swallowed, which made an
+    #     unperformed test indistinguishable from a clean result.
+    r = conflicts("Imports increased by 28%.", "Imports increased by 27.63%.")
+    good = r["rounding_check_errors"] == []
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the rounding check RAN (no swallowed errors): "
+          f"{r['rounding_check_errors'] or 'clean'}")
+
+    # --- and a real disagreement is still caught, so the fix did not defang it
+    r = conflicts("Imports increased by 27%.", "Imports increased by 24.7%.")
+    good = r["conflict"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 27% vs 24.7% still conflicts")
 
     # --- REGRESSION: numbers written as WORDS. "two premises" vs "three premises" is a numeric
     #     contradiction and a digit-only extractor saw nothing at all.

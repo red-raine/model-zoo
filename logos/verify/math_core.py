@@ -113,22 +113,118 @@ CONSTANTS = {
 }
 
 
-def check_numeric_constant(claim: str, tolerance: float = 1e-4) -> Verdict:
-    """`pi = 3.14159` -- a numeric assertion about a named constant, checked to a stated tolerance."""
-    m = re.match(r"^\s*([A-Za-z][A-Za-z0-9 ()]{0,20}?)\s*(?:=|is|≈|=~)\s*(-?[\d.]+)\s*$", claim, re.I)
+def _significant_digits(literal: str) -> int:
+    """Significant digits in a written number. `3` -> 1, `3.0` -> 2, `3.14` -> 3, `0.00314` -> 3.
+
+    This is the piece the old validator threw away with float(), and losing it is what made `pi = 3.14`
+    REFUTED: without the literal's precision there is no way to ask whether a value is a CORRECT ROUNDING,
+    only whether it is close, and those are different questions.
+    """
+    t = str(literal).strip().lstrip("+-")
+    if "." in t:
+        t = t.rstrip("0") if t.rstrip("0").endswith(".") is False else t
+        if t.endswith("."):
+            t = t[:-1]
+    t = t.replace(".", "")
+    t = t.lstrip("0")
+    return max(1, len(t))
+
+
+def _round_to_sf(x: float, n: int) -> float:
+    """Round x to n significant digits, which is what a stated constant is claiming."""
+    if x == 0:
+        return 0.0
+    from math import floor, log10
+    digits = n - int(floor(log10(abs(x)))) - 1
+    return round(x, digits)
+
+
+def check_numeric_constant(claim: str, tolerance: float | None = None,
+                           required_rel_error: float | None = None) -> Verdict:
+    """`pi = 3.14` -- is the stated value a CORRECT ROUNDING of the constant?
+
+    THE DEFECT THIS REPLACES. The old check was `abs(true - stated) <= 1e-4`, i.e. an ABSOLUTE tolerance,
+    and it produced three wrong answers:
+
+        pi = 3.14    REFUTED   rel_err 5.07e-04 vs tol 1e-4 -- but 3.14 IS pi correctly rounded to 3 s.f.
+        e  = 2.718   REFUTED   same: correctly rounded to 4 s.f.
+        pi = 22/7    UNKNOWN   the regex only accepted a decimal literal as the stated value
+
+    and an absolute tolerance is not scale-free: 1e-4 is reasonable for pi and absurd for the speed of
+    light. Rounding correctness has no tolerance at all, which is why it is the right test:
+
+        pi = 3      1 s.f.   pi rounds to 3      -> CORRECT (but coarse)
+        pi = 3.0    2 s.f.   pi rounds to 3.1    -> WRONG   (and the point the old code missed)
+        pi = 3.14   3 s.f.   pi rounds to 3.14   -> CORRECT
+        pi = 3.2    2 s.f.   pi rounds to 3.1    -> WRONG
+
+    COARSE IS NOT FALSE. `pi = 3` is a correct rounding and a terrible value to plot a circle with; that is
+    a separate question, answered by `required_rel_error` and reported in `assumed` rather than folded into
+    the verdict. Refuting a correct rounding because it is imprecise would drop good data -- the failure
+    direction this project calls catastrophic.
+    """
+    m = re.match(r"^\s*([A-Za-z][A-Za-z0-9 ()\-]{0,24}?)\s*(?:=|is|\u2248|=~)\s*(.+?)\s*$",
+                 claim or "", re.I)
     if not m or sympy is None:
         return Verdict(UNKNOWN, "numeric_constant", "not a recognisable constant claim")
     name = m.group(1).strip().lower().rstrip("(").strip()
-    stated = float(m.group(2))
+    stated_literal = m.group(2).strip()
     if name not in CONSTANTS:
         return Verdict(UNKNOWN, "numeric_constant", f"unknown constant {name!r}")
+
     true_val = float(CONSTANTS[name]().evalf())
-    if abs(true_val - stated) <= tolerance:
-        return Verdict(VERIFIED, "numeric_constant", f"{name} = {true_val:.10g}, stated {stated}",
-                       value=true_val)
+
+    # ---- a plain decimal literal: test whether it is the true value CORRECTLY ROUNDED
+    if re.fullmatch(r"-?\d+\.?\d*", stated_literal):
+        stated = float(stated_literal)
+        sf = _significant_digits(stated_literal)
+        expected = _round_to_sf(true_val, sf)
+        rel = abs(stated - true_val) / abs(true_val) if true_val else 0.0
+        if abs(stated - expected) <= abs(expected) * 1e-12 + 1e-15:
+            notes = []
+            if required_rel_error is not None and rel > required_rel_error:
+                notes.append(f"rel_err {rel:.2e} exceeds the required {required_rel_error:.2e}: a correct "
+                             f"rounding that is TOO COARSE for the declared use")
+            return Verdict(VERIFIED, "numeric_constant",
+                           f"{name} correctly rounded to {sf} s.f. as {stated_literal} "
+                           f"(true {true_val:.10g}, rel_err {rel:.2e})",
+                           assumed=notes, value=true_val)
+        return Verdict(REFUTED, "numeric_constant",
+                       f"{name} = {true_val:.10g}; {stated_literal} has {sf} s.f. but the correct rounding "
+                       f"to {sf} s.f. is {expected:g}, not {stated:g}", value=true_val)
+
+    # ---- an expression as the stated value, e.g. `pi = 22/7`. Correct only if it is EXACT.
+    try:
+        expr = _parse(stated_literal)
+        diff = float((CONSTANTS[name]() - expr).evalf())
+        rel = abs(diff) / abs(true_val) if true_val else abs(diff)
+    except Exception:                                       # noqa: BLE001
+        return Verdict(UNKNOWN, "numeric_constant", f"could not evaluate stated value {stated_literal!r}")
+    if abs(diff) <= abs(true_val) * 1e-12 + 1e-15:
+        return Verdict(VERIFIED, "numeric_constant", f"{name} = {stated_literal} exactly", value=true_val)
     return Verdict(REFUTED, "numeric_constant",
-                   f"{name} = {true_val:.10g}, stated {stated} (outside +/-{tolerance})",
+                   f"{name} = {true_val:.10g}, not {stated_literal} exactly (rel_err {rel:.2e})",
                    value=true_val)
+
+
+def precision_sufficient(claim: str, required_rel_error: float) -> dict:
+    """Is a correctly-rounded constant precise ENOUGH for a stated use? Separate from being true.
+
+    `pi = 3` is a correct rounding and a 4.5% error. Plotting a circle of radius 500 px with it puts the
+    edge 22 px out, which is visible. `pi = 3.14` is 5.1e-4, i.e. 0.25 px at that radius. So the same claim
+    is acceptable or not depending ENTIRELY on what it is for, which is why the precision requirement has to
+    be an input rather than a constant buried in a validator.
+    """
+    v = check_numeric_constant(claim)
+    if v.status != VERIFIED:
+        return {"sufficient": None, "reason": f"not a correct rounding ({v.status}): {v.detail}",
+                "rel_error": None}
+    m = re.search(r"rel_err (\S+?)\)", v.detail)
+    rel = float(m.group(1)) if m else None
+    if rel is None:
+        return {"sufficient": None, "reason": "could not read the relative error", "rel_error": None}
+    return {"sufficient": rel <= required_rel_error, "rel_error": rel,
+            "reason": f"rel_err {rel:.2e} vs required {required_rel_error:.2e}"}
 
 
 # ------------------------------------------------------------------- identities
@@ -314,7 +410,18 @@ def check_arithmetic_equality(lhs: str, rhs: str, tolerance: float = 0.0) -> Ver
 
 
 def check_arithmetic_text(claim: str) -> Verdict:
-    """Parse `A op B = C` shaped text and check it exactly."""
+    """Parse `A op B = C` shaped text and check it exactly.
+
+    A NAMED CONSTANT defers to `check_numeric_constant` first. Without that, `pi = 3.1416` was VERIFIED by
+    the constant check and REFUTED here -- exact symbolic equality cannot accept a rounding, so the same
+    string got opposite verdicts depending on the entry path.
+    """
+    try:
+        const = check_numeric_constant(claim)
+        if const.status in (VERIFIED, REFUTED):
+            return const
+    except Exception:                                       # noqa: BLE001
+        pass
     m = re.match(r"^\s*(.+?)\s*=\s*(.+?)\s*$", claim)
     if not m:
         return Verdict(UNKNOWN, "arithmetic", "no '=' in the claim")
@@ -365,6 +472,57 @@ def run_self_test() -> bool:
     good = check_numeric_constant("pi = 3.14159").status == VERIFIED
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] pi = 3.14159 VERIFIED")
+    # --- A CORRECT ROUNDING IS NOT A FALSE CLAIM. This was REFUTED by the old absolute-tolerance test.
+    for lit in ("3.14", "3.142", "3.1416", "3.14159"):
+        v = check_numeric_constant(f"pi = {lit}")
+        good = v.status == VERIFIED
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] pi = {lit} is a correct rounding -> {v.status}")
+
+    # --- and a WRONG rounding is still caught. Note 3.1 is CORRECT at 2 s.f. (pi rounds to 3.1); 3.0 and
+    #     3.2 are not. My first version of this test listed 3.1 as wrong, which was my error, not the
+    #     engine's -- the rounding test caught my misreading of my own fixture.
+    for lit in ("3.0", "3.2", "3.15", "3.1417"):
+        v = check_numeric_constant(f"pi = {lit}")
+        good = v.status == REFUTED
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] pi = {lit} is NOT the correct rounding -> {v.status}")
+
+    # --- 1 significant digit: coarse but CORRECT. Coarse is not false.
+    v = check_numeric_constant("pi = 3")
+    good = v.status == VERIFIED
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] pi = 3 is a correct 1-s.f. rounding -> {v.status} "
+          f"(coarse, not wrong)")
+
+    # --- but it is wildly insufficient for a precise use, and that is reported separately
+    d = precision_sufficient("pi = 3", 1e-3)
+    good = d["sufficient"] is False and d["rel_error"] > 1e-2
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] pi = 3 is INSUFFICIENT for a 1e-3 use "
+          f"(rel_err {d['rel_error']:.2e}) while still being a correct rounding")
+
+    d = precision_sufficient("pi = 3.14", 1e-3)
+    good = d["sufficient"] is True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] pi = 3.14 IS sufficient for the same use "
+          f"(rel_err {d['rel_error']:.2e})")
+
+    # --- THE TWO-PATH DISAGREEMENT: both entry points must agree on the same string
+    same = all(check_arithmetic_text(f"pi = {lit}").status == check_numeric_constant(f"pi = {lit}").status
+               for lit in ("3", "3.0", "3.14", "3.1416", "3.2"))
+    good = same
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] check_arithmetic_text and check_numeric_constant AGREE on "
+          f"every pi rounding (they disagreed before)")
+
+    # --- an expression as the stated value is now parsed instead of reported as unrecognisable
+    v = check_numeric_constant("pi = 22/7")
+    good = v.status == REFUTED and "22/7" in v.detail
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] pi = 22/7 parses and is REFUTED as an exact claim "
+          f"(rel_err {float(22 / 7 - 3.141592654) / 3.141592654:.2e})")
+
     good = check_numeric_constant("pi = 3.2").status == REFUTED
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] pi = 3.2 REFUTED")

@@ -386,3 +386,70 @@ trade exactly the way the thread documents: cheap decision models lose on hard c
 - if this path is pursued, **any evaluation without the majority-class baseline will report ~30% for a
   constant and look like progress.**
 - NO HELD-OUT SET. The model collapses for want of the labels that would fix it.
+
+
+---
+
+## Update 2026-10-28 (e) -- rounding is not error, repair is not cleaning, and coverage was 0% not 37.5%
+
+### Reported precision was wrong in the direction that matters
+`pi = 3.14` and `e = 2.718` were being REFUTED. Both are CORRECT ROUNDINGS. The validator compared against an
+ABSOLUTE tolerance of 1e-4 -- which is also not scale-free. Replaced with stated-precision semantics: a value
+with N significant digits is correct iff it equals the true value rounded to N s.f. No tolerance.
+```
+pi = 3   KEEP (correct 1 s.f., coarse)     pi = 3.0  DROP (2 s.f. is 3.1)
+pi = 3.1 KEEP (correct 2 s.f.)             pi = 3.14 KEEP (correct 3 s.f.)    pi = 3.2 DROP
+```
+**Coarse is not false.** `precision_sufficient(claim, required_rel_error)` answers adequacy separately: pi = 3
+is a correct rounding AND a 4.5% error, useless for a 500 px circle where pi = 3.14 is 0.25 px out.
+Also fixed: two code paths that gave opposite verdicts on `pi = 3.1416`, and `pi = 22/7` which was
+unrecognisable because only a decimal literal parsed.
+
+### Repair default changed to DROP
+I had `2 + 2 = 5` -> REPAIR because the correction is provable. The proof is irrelevant: a repair emits a row
+the source never contained -- the source said 5, we emit 4, and we cannot know if the author meant 4. For a
+training corpus that is authoring data. `repair_policy` now defaults to "drop"; repair is opt-in and altered
+rows carry `altered=True`.
+
+### New module: `logos/corpus_sizing.py` -- 200 real curated AVeriTeC claims
+```
+first run   : 10/200 false drops (5.0%)
+after fixes :  0/200 false drops
+coverage    : KEEP 0 | REPAIR 0 | DROP 0 | ESCALATE 200  = 0.0%
+```
+numeric_conflict was comparing two DATES ("1950 vs 2020"), reading "75,000 flu deaths last year in 2019" as
+75,000 YEARS (the unit four words away), and matching "Forty percent" to 5,100. Fixed by making units
+ADJACENT, excluding years, giving word-form numbers 1 s.f., and honouring rounding. Then the architectural
+rule: **evidence may only refute a row that a validator can parse** -- a checkable `1 mile = 1.609344 km` is
+refuted by contradicting evidence, a prose claim gets a flag and goes to review.
+
+**And then coverage collapsed from 37.5% to 0%, because 37.5% was an illusion.** All 75 KEEPs came from the
+`structure` check -- well-formedness -- including gold-REFUTED claims such as "New Zealand's new Food Bill
+bans gardening" and "All USA Ballots Arriving After Election Day Will Be Thrown Out". KEEP was being issued
+for shape and read as verification. For prose, structure is now a PRECONDITION, never a conclusion.
+
+The corpus answers 93.5% of its own claims. So the gap is 93.5 points on this population and it is a
+FACT-VERIFICATION gap, not a routing one. Arithmetic, units, constants and code rows remain decidable and are
+a different population -- 0% must not be quoted as "the pipeline does nothing".
+
+### A swallowed error that looked non-deterministic
+`numeric_conflict` never had the `sys.path` bootstrap the other modules have, so its lazy
+`logos.verify.math_core` import failed under `python file.py` and `except Exception: pass` discarded it: the
+rounding check silently did not run, and one assertion passed on import and failed as a script. The failure is
+now recorded in `rounding_check_errors` and asserted, because an unperformed test must not look like a
+passing one.
+
+### Cascade wired in
+`evidence_sufficient` defaulted to the float32 TEI backend at 2,776 ms/pair; now the measured winner, the 19M
+cross-encoder at 10.2 ms, with `truncated` flagged for >512-token pairs so the 568M arm takes those.
+
+### My own errors, caught by the oracle three times
+pi = 3.1 is a correct 2 s.f. rounding (I said wrong); 28 is the correct rounding of 27.63 (I said 27); and I
+wrote prose rows for a rule requiring a checkable row. Testing against the oracle rather than intuition is
+what surfaced each one.
+
+### Honest limits
+200 of 500 dev rows, and dev was already used for threshold fitting elsewhere -- not held out.
+numeric_conflict still fires on 3.5% of real pairs; on prose it can now only raise a flag, never a drop.
+**No held-out labelled set.** Unchanged, and now the single thing between these measurements and an accuracy
+claim.
