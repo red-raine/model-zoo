@@ -60,6 +60,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("audit.py", False),
     ("code_refinery.py", False),
     ("code_exec.py", False),
+    ("context_pack.py", False),
+    ("ast_repair.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
