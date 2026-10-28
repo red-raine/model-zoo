@@ -66,6 +66,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("truth_kinds.py", False),
     ("row_eval.py", False),
     ("ontology_bundle.py", False),
+    ("crosscheck.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
