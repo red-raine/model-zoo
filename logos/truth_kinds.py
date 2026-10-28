@@ -118,6 +118,47 @@ def classify(text: str) -> dict:
     return {"kind": hits[0], "all_hits": hits, "decidable": KINDS[hits[0]]["decidable"]}
 
 
+
+# ------------------------------------------------------------------ validator identity
+# THE BUG THIS FIXES. The store counted validator NAMES, so a caller could record "checker_a" and
+# "checker_b" and get a promotion -- even if both names wrapped the SAME implementation. That is fake
+# corroboration, and corroboration is the entire thing this store protects.
+#
+# Identity is now an IMPLEMENTATION TAG from a closed registry. Two names with the same tag are ONE witness.
+# An unregistered name is REFUSED, because a free-form string cannot be audited.
+VALIDATOR_REGISTRY: dict[str, str] = {
+    # name -> implementation tag. Same tag = same witness.
+    "math_core.sympy": "sympy",
+    "math_verify.parser": "math_verify",
+    "crosscheck.ast": "python_ast",
+    "crosscheck.tokenize": "python_tokenize",
+    "crosscheck.symtable": "python_symtable",
+    "crosscheck.astwalk": "python_astwalk",
+    "crosscheck.datetime": "stdlib_datetime",
+    "crosscheck.calendar": "manual_calendar",
+    "crosscheck.float_units": "float_factors",
+    "crosscheck.rational_units": "rational_factors",
+    "crosscheck.sympy_evalf": "sympy_const",
+    "crosscheck.math_module": "libm_const",
+    "wikidata.sparql": "wikidata",
+    "ols4.api": "ols4",
+    "crossref.api": "crossref",
+    "openalex.api": "openalex",
+    "smt.z3": "z3",
+    "geometry.sympy": "sympy",
+}
+
+
+def implementation_of(validator: str) -> str:
+    """Map a validator name to the implementation it actually runs. Unknown names raise."""
+    if validator not in VALIDATOR_REGISTRY:
+        raise KeyError(
+            f"validator {validator!r} is not registered. Independence cannot be established for an "
+            f"unaudited name, so it is refused rather than counted as a witness. Register it in "
+            f"VALIDATOR_REGISTRY with the implementation tag it actually runs.")
+    return VALIDATOR_REGISTRY[validator]
+
+
 # ------------------------------------------------------------------ the anti-poisoning store
 PROVEN, TENTATIVE, MISS = "PROVEN", "TENTATIVE", "MISS"
 
@@ -128,7 +169,9 @@ class Entry:
     claim: str
     kind: str
     verdict: str
-    validators: dict = field(default_factory=dict)   # validator name -> verdict, distinct only
+    # IMPLEMENTATION tag -> verdict. Keyed on the tag, not the name, so "a" and "b" wrapping the same code
+    # are one witness by construction rather than by convention.
+    validators: dict = field(default_factory=dict)
     first_seen: float = 0.0
     last_validated: float = 0.0
     uses: int = 0
@@ -172,15 +215,22 @@ class TruthStore:
 
     # ------------------------------------------------------------------ write
     def record(self, claim: str, kind: str, verdict: str, validator: str) -> Entry:
-        """Record ONE validation. The validator NAME is what determines independence."""
+        """Record ONE validation.
+
+        `validator` is resolved through VALIDATOR_REGISTRY to an IMPLEMENTATION tag, and entries are keyed on
+        that tag. Two names wrapping the same implementation are ONE witness; an unregistered name raises.
+        Counting names was the bug -- it let a caller manufacture corroboration by renaming.
+        """
+        impl = implementation_of(validator)
         k = self.key(claim, kind)
         e = self.entries.get(k)
         now = time.time()
         if e is None:
             e = Entry(key=k, claim=claim, kind=kind, verdict=verdict, first_seen=now)
             self.entries[k] = e
-        # a differing verdict from a distinct validator is a CONFLICT, and conflicts are not corroboration
-        e.validators[validator] = verdict
+        # a differing verdict from a distinct IMPLEMENTATION is a CONFLICT, and conflicts are not
+        # corroboration
+        e.validators[impl] = verdict
         e.last_validated = now
         if len(set(e.validators.values())) > 1:
             e.demerits += 1
@@ -318,7 +368,7 @@ def run_self_test() -> bool:
 
     # --- THE ANTI-POISONING GATE. A single witness must never be promoted.
     S = TruthStore(min_validations=2)
-    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core")
+    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core.sympy")
     s1 = S.serve("pi = 3.14159", "numeric_constant")
     good = s1["status"] == TENTATIVE
     ok = ok and good
@@ -326,23 +376,43 @@ def run_self_test() -> bool:
 
     # --- and the SAME validator twice is still one witness. This is the property that matters: repeated
     #     runs are not corroboration, and a cache that counts them is how poison becomes consensus.
-    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core")
-    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core")
+    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core.sympy")
+    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core.sympy")
     s2 = S.serve("pi = 3.14159", "numeric_constant")
     good = s2["status"] == TENTATIVE and s2["entry"]["corroborations"] == 1
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] the SAME validator three times is still ONE witness")
 
+    # --- FAKE INDEPENDENCE: two NAMES wrapping the SAME implementation must NOT promote. This was the bug.
+    Sx = TruthStore(min_validations=2)
+    Sx.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_core.sympy")
+    Sx.record("pi = 3.14159", "numeric_constant", "VERIFIED", "geometry.sympy")   # same "sympy" tag
+    sx = Sx.serve("pi = 3.14159", "numeric_constant")
+    good = sx["status"] == TENTATIVE and sx["entry"]["corroborations"] == 1
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] two NAMES sharing one implementation are ONE witness "
+          f"(fake independence refused)")
+
+    # --- and an UNREGISTERED validator name is refused outright rather than counted
+    try:
+        Sx.record("pi = 3.14159", "numeric_constant", "VERIFIED", "totally_new_checker")
+        bad = False
+    except KeyError:
+        bad = True
+    ok = ok and bad
+    print(f"  [{'PASS' if good and bad else 'FAIL'}] an unregistered validator name raises instead of "
+          f"counting as a witness")
+
     # --- a genuinely independent second validator promotes it
-    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "independent_check")
+    S.record("pi = 3.14159", "numeric_constant", "VERIFIED", "math_verify.parser")
     s3 = S.serve("pi = 3.14159", "numeric_constant")
     good = s3["status"] == PROVEN
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a distinct validator that AGREES promotes to PROVEN")
 
     # --- disagreement is not corroboration: it demotes
-    S.record("1 mile = 1.6 km", "unit_conversion", "REFUTED", "math_core")
-    S.record("1 mile = 1.6 km", "unit_conversion", "VERIFIED", "other_source")
+    S.record("1 mile = 1.6 km", "unit_conversion", "REFUTED", "crosscheck.float_units")
+    S.record("1 mile = 1.6 km", "unit_conversion", "VERIFIED", "crosscheck.rational_units")
     sd = S.serve("1 mile = 1.6 km", "unit_conversion")
     good = sd["status"] == TENTATIVE and "demoted" in sd["reason"]
     ok = ok and good
@@ -368,8 +438,8 @@ def run_self_test() -> bool:
 
     # --- stale entries are served as TENTATIVE, not PROVEN
     S2 = TruthStore(min_validations=2, ttl_s=-1.0)
-    S2.record("e = 2.718281828", "numeric_constant", "VERIFIED", "a")
-    S2.record("e = 2.718281828", "numeric_constant", "VERIFIED", "b")
+    S2.record("e = 2.718281828", "numeric_constant", "VERIFIED", "math_core.sympy")
+    S2.record("e = 2.718281828", "numeric_constant", "VERIFIED", "math_verify.parser")
     good = S2.serve("e = 2.718281828", "numeric_constant")["status"] == TENTATIVE
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] an entry past its re-validation horizon is TENTATIVE")
@@ -379,8 +449,8 @@ def run_self_test() -> bool:
     tmp = tempfile.mkdtemp()
     p = os.path.join(tmp, "truth.json")
     S3 = TruthStore(path=p, min_validations=2)
-    S3.record("4 + 4 = 8", "arithmetic", "VERIFIED", "math_verify")
-    S3.record("4 + 4 = 8", "arithmetic", "VERIFIED", "math_core")
+    S3.record("4 + 4 = 8", "arithmetic", "VERIFIED", "math_verify.parser")
+    S3.record("4 + 4 = 8", "arithmetic", "VERIFIED", "math_core.sympy")
     S3.save()
     S4 = TruthStore(path=p, min_validations=2)
     good = S4.serve("4 + 4 = 8", "arithmetic")["status"] == PROVEN
