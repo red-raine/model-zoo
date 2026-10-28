@@ -416,6 +416,39 @@ def check_arithmetic_equality(lhs: str, rhs: str, tolerance: float = 0.0) -> Ver
                    value=float(a.evalf()))
 
 
+_DERIV_RE = re.compile(r"^\s*d\s*/\s*d\s*([A-Za-z])\s*(.+?)\s*=\s*(.+?)\s*$", re.I)
+_INTEG_RE = re.compile(r"^\s*(?:the\s+)?(?:integral|antiderivative)\s+of\s+(.+?)\s*d\s*([A-Za-z])\s*"
+                       r"=\s*(.+?)\s*$", re.I)
+_INTEG_SYM_RE = re.compile(r"^\s*(?:\u222b|int)\s*(.+?)\s*d\s*([A-Za-z])\s*=\s*(.+?)\s*$", re.I)
+
+
+def check_calculus_text(claim: str) -> Verdict:
+    """`d/dx x^2 = 2` and `integral of 2*x dx = x^2` -- parse the ROW and route it.
+
+    THIS CLOSES A DOCUMENTED DEAD END. `truth_kinds.validate("d/dx x^2 = 2")` returns kind='calculus',
+    decidable=True, verdict='ROUTED', note='hand to verify/math_core.check_derivative|check_integral'. The
+    taxonomy knew the row was decidable and named the functions to call -- and no caller ever called them, so
+    a decidable row was silently treated as undecidable. Measured before this function existed:
+    `classify_repair("d/dx x^2 = 2")` returned tier 3, i.e. "no oracle", for a row with an exact oracle.
+
+    Returns UNKNOWN for a row that is not in either shape, so the caller can fall through.
+    """
+    if sympy is None:
+        return Verdict(UNKNOWN, "calculus", "sympy unavailable")
+    text = (claim or "").strip()
+    m = _DERIV_RE.match(text)
+    if m:
+        var, expr, claimed = m.group(1), m.group(2), m.group(3)
+        # `d/dx of x^2` shows up often enough to be worth stripping
+        expr = re.sub(r"^\s*of\s+", "", expr, flags=re.I)
+        return check_derivative(expr, var, claimed)
+    m = _INTEG_RE.match(text) or _INTEG_SYM_RE.match(text)
+    if m:
+        expr, var, claimed = m.group(1), m.group(2), m.group(3)
+        return check_integral(expr, var, claimed)
+    return Verdict(UNKNOWN, "calculus", "not a derivative or integral claim shape")
+
+
 def check_arithmetic_text(claim: str) -> Verdict:
     """Parse `A op B = C` shaped text and check it exactly.
 
@@ -427,6 +460,12 @@ def check_arithmetic_text(claim: str) -> Verdict:
         const = check_numeric_constant(claim)
         if const.status in (VERIFIED, REFUTED):
             return const
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        calc = check_calculus_text(claim)
+        if calc.status in (VERIFIED, REFUTED):
+            return calc
     except Exception:                                       # noqa: BLE001
         pass
     m = re.match(r"^\s*(.+?)\s*=\s*(.+?)\s*$", claim)
@@ -529,6 +568,22 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] pi = 22/7 parses and is REFUTED as an exact claim "
           f"(rel_err {float(22 / 7 - 3.141592654) / 3.141592654:.2e})")
+
+    # --- THE ROUTE THAT WAS NEVER TAKEN. truth_kinds said decidable=True, verdict=ROUTED, and named the
+    #     function; nothing called it. Now the row is actually validated.
+    for row, expect in (("d/dx x^2 = 2*x", VERIFIED), ("d/dx x^2 = 2", REFUTED),
+                        ("integral of 2*x dx = x^2", VERIFIED),
+                        ("integral of 2*x dx = x^3", REFUTED)):
+        v = check_calculus_text(row)
+        good = v.status == expect
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] {row:28s} -> {v.status}")
+
+    # --- and a non-calculus row is UNKNOWN, not a wrong guess
+    v = check_calculus_text("2 + 2 = 5")
+    good = v.status == UNKNOWN
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a non-calculus row returns UNKNOWN (no free opinions)")
 
     # --- A VALIDATOR MUST NEVER RAISE. It returns UNKNOWN. Names that sympy knows as functions (gamma,
     #     beta, zeta) used to take the pipeline down with a TypeError.

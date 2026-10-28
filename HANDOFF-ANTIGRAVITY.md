@@ -501,3 +501,58 @@ Repair correctly never fires on prose -- those rows are tier 3.
 Tier 1 is narrow on purpose. Unit conversion is deliberately tier 2. The `math_fix` flag is only as good as
 its consumers: a job that ignores `alteration` will train on corrected rows as originals. Coverage on prose
 is unchanged at 0% -- this makes decidable rows survive instead of being discarded.
+
+---
+
+### THE NUMERIC SIGNAL CARRIES NO INFORMATION, AND A DOCUMENTED ROUTE HAD NO CALLER (2026-10-28)
+
+#### A null result on the thing I had been building
+`numeric_conflict` scored 4/5 with 0/10 false flags on five triples I wrote. Nobody had asked whether a
+numeric disagreement actually predicts a FALSE claim. New module `numeric_signal_eval.py`, on 500 real
+labelled AVeriTeC pairs:
+`
+opportunity   10.2% of rows even have a comparable pair of quantities
+flags         5.0%  (25/500)
+precision     0.722  against a base rate of 0.714
+LIFT          1.01x
+precision CI  [0.49, 0.88] on 18 flags -- the base rate sits INSIDE it
+recall        0.043  -- misses 96% of false claims
+`
+**Indistinguishable from flagging at random.** The 4/5 came from five pairs designed to be catchable -- the
+constructed-label trap, now with a number on it.
+
+Acted on: prose numeric conflicts no longer enter the review queue. The disagreement is still recorded in the
+audit trail, but a flag that cannot raise the base rate spends review capacity at random. One parameter
+(`prose_numeric_flags`) restores the old behaviour so the null can be re-tested.
+Why it fails: a number in the claim and a number in the evidence are usually about DIFFERENT quantities even
+when both are lengths. "Same unit family" is much coarser than "same measured thing". Numeric verification
+stays exact where the ROW ITSELF is a numeric claim; it is worthless as a claim-vs-prose detector.
+
+#### A documented route that nobody took
+`truth_kinds.validate("d/dx x^2 = 2")` returned `kind='calculus', decidable=True, verdict='ROUTED'` and
+named the function to call -- and there was no `calculus` branch, so nothing called it. A row with an exact
+oracle was reported UNKNOWN and escalated. **This is the same defect already fixed once for arithmetic**, whose
+source comment reads "ROUTING IS NOT VALIDATION ... so 2 + 2 = 5 came back UNKNOWN and was ESCALATEd to a
+model". The lesson was written down and not applied to the next kind.
+Fixed with `math_core.check_calculus_text` plus a `calculus` branch in `truth_kinds.validate`:
+`
+d/dx x^2 = 2              REFUTED -> REPAIR to "d/dx x^2 = 2*x"   (was ESCALATE)
+d/dx x^2 = 2*x            VERIFIED -> KEEP
+integral of 2*x dx = x^2  VERIFIED        integral of 2*x dx = x^3  REFUTED
+d/dx sin(x) = cos(x) + 1  REPAIR to "d/dx sin(x) = cos(x)"
+`
+**So calculus is TIER 1**, correcting an intuition I had repeated: calculus is not the hard case, because
+`check_derivative` COMPUTES the answer. What resists repair is a claim whose missing piece is a PREMISE --
+`a^2 + b^2 = c^2` is a theorem about right triangles, not an identity, and supplying the premise is authoring.
+
+#### A null result needs an interval
+Precision 0.722 reads like a property of the detector; on 18 flags it is 13/18 with a Wilson CI of [0.49, 0.88]
+and the base rate 0.714 sits inside it.
+
+#### Regression on real data
+200 curated claims after all changes: KEEP 0 | REPAIR 0 | ESCALATE 200 | DROP 0 -- zero false drops.
+
+#### Limits
+dev is not held out. The 10.2% opportunity rate is a property of AVeriTeC Q/A evidence -- a numeric corpus
+would give the detector far more to work with, so this is NOT "numeric checking does not work". The calculus
+router handles two row shapes; `d^2/dx^2` and partials still return UNKNOWN, correctly.

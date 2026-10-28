@@ -53,6 +53,7 @@ if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
 from logos.verify.math_core import (CAPABILITIES, UNKNOWN, VERIFIED,  # noqa: E402
+                                    check_calculus_text,
                                     check_derivative, check_determinant,
                                     check_identity, check_integral, check_matrix_product,
                                     check_numeric_constant, check_solution,
@@ -318,6 +319,10 @@ def validate(claim: str) -> dict:
         r = _verify_arith(claim)
         v = type("V", (), {"status": r.get("verdict", UNKNOWN),
                            "detail": str(r.get("reason", r.get("detail", "")))[:160]})()
+    elif kind == "calculus":
+        # ROUTING IS NOT VALIDATION, part 2. This branch did not exist: calculus fell through to the generic
+        # ROUTED return, so a row math_core decides exactly came back UNKNOWN and was escalated.
+        v = check_calculus_text(claim)
     elif kind == "logical":
         v = None
         return {"kind": kind, "decidable": True, "verdict": "ROUTED",

@@ -161,6 +161,24 @@ def _tier1_repair(row: str) -> dict:
         return {"status": "NO_ORACLE",
                 "reason": "constant claim, but the corrected rounding did not verify"}
 
+    # ---- shape 1b: calculus. the expression and variable are the authority; the claimed result is derived.
+    try:
+        calc = math_core.check_calculus_text(row)
+    except Exception:                                         # noqa: BLE001
+        calc = None
+    if calc is not None and calc.status == "REFUTED" and calc.value is not None:
+        m = None
+        import re as _re2
+        m = _re2.match(r"^\s*d\s*/\s*d\s*([A-Za-z])\s*(.+?)\s*=\s*(.+?)\s*$", row, _re.I)
+        if m:
+            var, expr = m.group(1), m.group(2)
+            expr = _re2.sub(r"^\s*of\s+", "", expr, flags=_re.I)
+            candidate = f"d/d{var} {expr} = {calc.value}"
+            if math_core.check_calculus_text(candidate).status == "VERIFIED":
+                return {"status": "FIXED", "candidate": candidate, "tier": 1,
+                        "validator": "check_derivative",
+                        "reason": f"d/d{var}({expr}) = {calc.value}; the repaired row re-verifies"}
+
     # ---- shape 2: arithmetic. the left side is a computable expression.
     try:
         v = math_core.check_arithmetic_text(row)
@@ -316,7 +334,8 @@ def guess_kind(row: str) -> str:
 
 
 def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None,
-                 gate_threshold: float = 0.5, repair_policy: str = "auto") -> dict:
+                 gate_threshold: float = 0.5, repair_policy: str = "auto",
+                 prose_numeric_flags: bool = False) -> dict:
     """One row, all the way through. Returns the disposition plus the reason for it.
 
     Every branch that can change the disposition is recorded in `why`, so a verdict can be audited
@@ -463,10 +482,14 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
                         refuter = "numeric_conflict"
                         why.append(f"REFUTED by {detail}")
                         break
-                    # prose: a number-pattern disagreement is a reason to LOOK, not a verdict.
-                    flags.append(detail)
-                    why.append(f"FLAGGED, not dropped: {detail} -- the row is prose, so pairing these "
-                               f"numbers to the quantity they measure needs judgement a pattern cannot do")
+                    # prose: a number-pattern disagreement is NOT a verdict, and measured on 500 real
+                    # labelled pairs it is not even a useful hint (lift 1.01x, recall 0.04). Recorded in the
+                    # audit trail, kept out of the review queue.
+                    why.append(f"numeric disagreement, NOT flagged: {detail} -- the row is prose, and "
+                               f"measured lift is 1.01x against a 0.71 base rate on 18 flags, so this "
+                               f"would spend review capacity at the rate of picking at random")
+                    if prose_numeric_flags:
+                        flags.append(detail)
                     continue
             if disposition == KEEP and gate.get("sufficient") is False:
                 disposition = ESCALATE
@@ -837,19 +860,30 @@ def run_self_test() -> bool:
         #     row, so nothing in this suite has an opinion and evidence must not manufacture one.
         r = evaluate_row("One mile is 1.609344 kilometres.", kind="text",
                          evidence=["One mile is 1.500000 kilometres."])
-        good = r["disposition"] == ESCALATE and bool(r["flags"])
+        good = r["disposition"] == ESCALATE and not r["flags"]
         ok = ok and good
-        print(f"  [{'PASS' if good else 'FAIL'}] the PROSE form of that row is {r['disposition']} with a "
-              f"flag, not a drop")
+        print(f"  [{'PASS' if good else 'FAIL'}] the PROSE form of that row is {r['disposition']}, "
+              f"not a drop and not a queued flag")
 
         # --- ...but prose is FLAGGED and escalated, not dropped. On curated data a pattern-level
         #     disagreement was dropping ~3.5% of good rows, which is the catastrophic direction.
+        # --- a prose conflict is RECORDED but does NOT enter the review queue: measured lift 1.01x.
         r = evaluate_row("99% of people recover from COVID-19.", kind="text",
                          evidence=["Only 39.88% of people recover from COVID-19."])
-        good = r["disposition"] == ESCALATE and bool(r["flags"])
+        recorded = any("numeric disagreement" in w for w in r["why"])
+        good = r["disposition"] == ESCALATE and recorded and not r["flags"]
         ok = ok and good
-        print(f"  [{'PASS' if good else 'FAIL'}] the SAME kind of contradiction on PROSE is "
-              f"{r['disposition']} with {len(r['flags'])} flag(s), not a drop")
+        print(f"  [{'PASS' if good else 'FAIL'}] a PROSE conflict is recorded in the audit trail "
+              f"({recorded}) and kept OUT of the review queue ({len(r['flags'])} flags)")
+
+        # --- and the old behaviour is one parameter away, for anyone re-measuring
+        r2 = evaluate_row("99% of people recover from COVID-19.", kind="text",
+                          evidence=["Only 39.88% of people recover from COVID-19."],
+                          prose_numeric_flags=True)
+        good = len(r2["flags"]) == 1
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] prose_numeric_flags=True restores the flag "
+              f"({len(r2['flags'])}) so the null can be re-tested rather than trusted")
 
         # --- and a supporting passage must not become a drop, or the validator is just a hammer
         r = evaluate_row("1 mile = 1.609344 km", kind="text",

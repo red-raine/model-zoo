@@ -73,6 +73,7 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("numeric_conflict.py", False),
     ("onnx_rerank.py", True),
     ("encoder_bench.py", True),
+    ("numeric_signal_eval.py", True),
     ("egress.py", True),                   # live dual-path probe
 )
 
