@@ -68,6 +68,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("ontology_bundle.py", False),
     ("crosscheck.py", False),
     ("second_source.py", True),
+    ("rerank_client.py", True),
+    ("pipeline.py", True),
     ("egress.py", True),                   # live dual-path probe
 )
 

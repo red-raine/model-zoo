@@ -170,3 +170,47 @@ python logos/truth_measure.py           # validator agreement + cache worth
 
 If any of those disagree with what a document claims, **the document is wrong and the code is right.**
 That is the convention this repo runs on.
+
+
+---
+
+## Update 2026-10-28 -- live encoders, evidence gate, and the first end-to-end pipeline
+
+### What is new
+| module | what it does |
+|---|---|
+| `logos/rerank_client.py` | client for the two live cross-encoders + `evidence_sufficient()` gate |
+| `logos/pipeline.py` | the single row -> KEEP/REPAIR/ESCALATE/DROP path that was missing |
+| `logos/second_source.py` | four keyless public vocabularies for term corroboration |
+
+### Live infrastructure, probed
+```
+:8084  TEI            BAAI/bge-reranker-v2-m3   max_input_length 8192
+:8086  argus-reranker onnx, /rerank takes {"query","texts"}, returns LOGITS
+:6333  qdrant         1.19.2   lab-research 1009 | lair-code 18852 | mc-wiki 87  (all 384-dim cosine)
+```
+
+### Findings worth carrying forward
+1. **The two rerankers are one model.** TEI publishes probabilities, argus publishes logits, and after
+   sigmoid they differ by 0.000024. Two services, two runtimes, ONE witness.
+2. **A relevance score can only demote.** It ranks support above contradiction 5/5, which a token
+   baseline cannot do at all -- but it *discards* contradictions rather than flagging them, so a single
+   threshold would make REFUTED unreachable. The gate therefore returns its low band for validation.
+3. **REPAIR was unreachable** in `row_eval` -- defined, never assigned. Now produced by a numeric repair
+   that must re-pass the validator that refuted the original.
+4. **My first repair produced a tautology** (`pi = 3.0` -> `pi = pi`, which verifies and destroys the
+   claim). Verifying is necessary, not sufficient.
+5. **Correction to an earlier number:** "38/60 orphan modules" was an import-matcher artifact. Re-measured:
+   31 orphans, 25 are entry points, 6 are `__init__.py` -- dead library code is zero. The gap was never
+   inventory, it was composition.
+6. **Second-source corroboration is untrustworthy for our own jargon:** `macro-F1` matched "Macrobiotus
+   sp. F104", `P585` matched a protein. 4 hits on our jargon, 0 of them relevant. Science vocabulary: 5/5
+   corroborated and relevant. Counting works for public vocabulary, not for domain strings.
+
+### Honest limits
+- 16 constructed rows, labels written by me. The 16/16 proves the composition runs, not that it is accurate.
+- **No clean held-out set.** Still the largest defect.
+- Prose rows all reach ESCALATE because no check applies to "the Eiffel Tower is 330 metres tall". That
+  abstain pile is the real measure of coverage, and it has not been sized on a real corpus yet.
+- `ast_repair.repair_with_oracle` needs `allow_exec=True`, which L008 forbids by default, so it remains
+  available but unused. The only active repair is numeric.
