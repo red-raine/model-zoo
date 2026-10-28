@@ -281,3 +281,61 @@ is judged data to train it on.
 - **Retrieval is still missing.** The 18,852-point `lair-code` collection needs `bge-small-en-v1.5` on the
   host, which is not yet downloaded. Lexical candidate selection plus cross-encoder rerank is what exists.
 - **No clean held-out set.** Still the largest defect.
+
+
+---
+
+## Update 2026-10-28 (c) -- encoder chosen by measurement: 19M, not 568M
+
+### Hardware, measured
+`i9-9980HK, 8c/16t, torch capability = AVX2 (no AVX-512/VNNI), 64 GB, no discrete GPU.`
+Throughput from the built `llama-bench`:
+```
+LFM2.5-350M Q4  tg 44.8 tok/s
+LFM2.5-2.6B Q4  tg  8.5 tok/s
+LFM2.5-1.2B Q4  tg  2.5 tok/s   <- anomalous, slower than the 2.6B; under investigation
+```
+An LLM decision at ~450 tokens costs **~75 s/row** against 88.5 ms for a reranker: **~850x**, because it is
+autoregressive decoding versus one forward pass.
+
+### New module: `logos/encoder_bench.py`
+30 pairs, 14 of 20 negatives HARD (same subject, no answer), token-F1 baseline 0.882:
+```
+19M  ms-marco-MiniLM-L-4-v2   AUC 0.985    10.2 ms
+568M bge-reranker-v2-m3 int8  AUC 0.965   138.1 ms
+568M bge-reranker-v2-m3 fp32  AUC 0.960  2776.1 ms
+```
+- the 568M is **4 of 200 comparisons** behind the 19M -- indistinguishable at this size
+- **int8-vs-fp32 control**: int8 is 0.005 AHEAD on the same weights, so this is not an export artefact
+- 10,000 rows: **1.7 min** vs 23.0 min
+**Verdict: a cascade.** 19M for the bulk, 568M where a pair exceeds 512 tokens (MiniLM truncates) or the
+small model is ambiguous. Not a preference -- a measurement.
+
+### BitNet, priced from the repo
+- embedding speedups **1.32x-1.74x** (270M), **1.42x-2.28x** (0.6B) over F16 prefill, 8 threads
+- the headline **6.17x is against full precision**; we already run Q4_K_M, so it is not our baseline
+- I2_S runs on x86 **AVX2** (VibeASR cites it, RTF<1)
+- MTEB v2 66.26 vs bf16 twin 66.5; 67.49 vs 69.0 -- near-lossless, costs 0.24-1.51 points
+- the HF card's llama.cpp example uses **`:BF16`**, so the dequantised path is what actually runs there
+**Skip ternary for the encoder** -- it is already 10 ms and 64 GB makes bandwidth a non-issue. Measure it for
+the repair LLM, where 8.5 tok/s is the real bottleneck.
+
+### On a "decision model" (Reddit test)
+Every route was blocked (403, captcha, Redlib 429/410/bot_blocked), so this rests on search snippets: 56
+triage tasks, Qwen3.5-9B beating 14 "decision models", "every LLM that beat them reasons first", 96%.
+Honest reading: 56 tasks is small, and *reasoning first* is exactly what costs 75 s/row here. A quality
+result with no cost axis is not actionable on this machine. And a decision model is still a classifier
+scored by macro-F1 + AUC against **labels we do not have**.
+
+### CoT rewriting as self-repair -- right idea, named trap
+Rewriting traces with a model injects fluent rationalisation into a training set. We already hit this at
+small scale: the first numeric repair rewrote `pi = 3.0` to `pi = pi`, which verified and deleted the defect.
+**Invariant: keep a rewrite only if it re-passes the same validators with the verdict unchanged.** The
+mechanism is in `pipeline._numeric_repair`; extend it to prose with the LLM as proposer, validators as gate.
+ThinkingCap compresses traces (10K -> 1.3K chars); it does not verify logic.
+
+### Honest limits
+- 30 constructed pairs; a 0.020 AUC gap is 4 comparisons. No claim of accuracy.
+- ms-marco-MiniLM is trained for MS MARCO ranking and truncates at 512 tokens -- it cannot see our long rows.
+- the 1.2B throughput anomaly is unexplained and may indicate a bad build rather than a bad model.
+- **No held-out labelled set.** Every model decision above is contingent on that gap being fixed.
