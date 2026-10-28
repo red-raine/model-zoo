@@ -93,6 +93,10 @@ def _parse(text: str):
     symbolise it.
     """
     text = text.replace("^", "**")
+    # "15% of 80" -> "(15/100)*80" and a bare "15%" -> "(15/100)". Percent-of is notation; sympy would
+    # read % as modulo and `of` as a symbol.
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*%\s*of\s*", r"(\1/100)*", text, flags=re.I)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"(\1/100)", text)
     expr = parse_expr(text, transformations=TRANSFORMS, evaluate=True)
     long_names = [str(s) for s in expr.free_symbols if len(str(s)) > 2]
     if long_names:
@@ -277,6 +281,44 @@ def check_solution(equation: str, var: str, value: str) -> Verdict:
     if diff == 0:
         return Verdict(VERIFIED, "solution", f"{var}={v} makes the equation 0")
     return Verdict(REFUTED, "solution", f"{var}={v} leaves residual {diff}", value=diff)
+
+
+def check_arithmetic_equality(lhs: str, rhs: str, tolerance: float = 0.0) -> Verdict:
+    """Exact arithmetic equality via sympy. Deliberately an INDEPENDENT implementation of what
+    `verify/math_verify.py` does with its own parser, so the two can be cross-checked against each other.
+
+    Two implementations that share no code disagreeing on a claim is real evidence of a bug or an ambiguous
+    claim; one implementation agreeing with itself is not evidence of anything.
+    """
+    if sympy is None:
+        return Verdict(UNKNOWN, "arithmetic", "sympy unavailable")
+    try:
+        a = _parse(lhs)
+        b = _parse(rhs)
+    except Exception as e:                                 # noqa: BLE001
+        return Verdict(UNKNOWN, "arithmetic", f"could not parse: {type(e).__name__}")
+    if a.free_symbols or b.free_symbols:
+        return Verdict(UNKNOWN, "arithmetic",
+                       f"not a numeric claim: free symbols {sorted(map(str, a.free_symbols | b.free_symbols))}")
+    diff = sympy.simplify(a - b)
+    if diff == 0:
+        return Verdict(VERIFIED, "arithmetic", f"{lhs} = {rhs} exactly", value=float(a.evalf()))
+    try:
+        d = float(diff.evalf())
+    except Exception:                                      # noqa: BLE001
+        d = None
+    if tolerance > 0 and d is not None and abs(d) <= tolerance:
+        return Verdict(VERIFIED, "arithmetic", f"differs by {d} within tolerance", value=float(a.evalf()))
+    return Verdict(REFUTED, "arithmetic", f"{lhs} = {float(a.evalf()):.10g}, not {rhs}",
+                   value=float(a.evalf()))
+
+
+def check_arithmetic_text(claim: str) -> Verdict:
+    """Parse `A op B = C` shaped text and check it exactly."""
+    m = re.match(r"^\s*(.+?)\s*=\s*(.+?)\s*$", claim)
+    if not m:
+        return Verdict(UNKNOWN, "arithmetic", "no '=' in the claim")
+    return check_arithmetic_equality(m.group(1), m.group(2))
 
 
 # ------------------------------------------------------------------- capability manifest
