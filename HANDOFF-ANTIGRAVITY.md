@@ -556,3 +556,118 @@ and the base rate 0.714 sits inside it.
 dev is not held out. The 10.2% opportunity rate is a property of AVeriTeC Q/A evidence -- a numeric corpus
 would give the detector far more to work with, so this is NOT "numeric checking does not work". The calculus
 router handles two row shapes; `d^2/dx^2` and partials still return UNKNOWN, correctly.
+
+
+---
+
+### AUTOFORMALIZATION: WHAT WE HAVE, WHAT WE LACK, AND MATHLIB INSTALLED (2026-10-28)
+
+#### The honest answer to "have we been using this": we have the VALIDATOR half, and it was unreachable
+Already present before today:
+- `elan 4.2.4` with Lean **4.35.0** and 4.15.0
+- `tools/logos/logic/lean_bridge.py`: propositional AST -> Lean source -> kernel check, with `has_sorry`
+  detection and an `agree_with_python` cross-check
+- `tools/logos/logic/lean_verify_all.py`: a cached catalogue of machine-checked rules -- measured **51/51 on a
+  cold run (470 s)**
+
+So a real kernel oracle existed. Three things were missing, and one of them is embarrassing:
+
+1. **NO NATURAL-LANGUAGE TRANSLATION.** `lean_bridge.check(premise_texts, conclusion_text)` reads like it takes
+   English. It does not. Measured: `check(["All men are mortal", "Socrates is a man"], "Socrates is mortal")`
+   raises `ValueError: trailing tokens: ['men','are','mortal']`. It accepts **propositional atoms only**
+   (`["P", "P -> Q"]` -> `"Q"` works). The semantic-mapping layer of the pipeline is entirely absent.
+2. **NO MATHLIB**, so nothing beyond Lean core could even be *stated*. `Group`, `Finite`, `Nat.Prime` did not
+   exist for us. That is fixed today.
+3. **THE PATH WAS UNREACHABLE.** `logic/channel.py` is the only caller of `lean_bridge`, and **nothing imports
+   `channel.py`**. So the Lean oracle was not on any execution path in the pipeline -- the same pattern as
+   `row_eval` being unimported, and the calculus route never being taken.
+
+#### Mathlib is now installed, measured rather than assumed
+```
+Lake project  B:\datasets\lean\logoslean        (lake new logoslean math)
+mathlib       leanprover-community/mathlib4 v4.35.0  commit 56a005855ea17e0b0958f73ec801ae140b0a1679
+toolchain     leanprover/lean4:v4.35.0              (matches what elan already had)
+cache         9,031 files downloaded -> 8,643 oleans, 1.7 GB
+verified      import Mathlib works: #check @Group, #check @Nat.Prime,
+              and a Sylow theorem unstateable in core:
+              @Sylow.exists_subgroup_card_pow_prime : p ^ n ∣ Nat.card G -> ∃ K, Nat.card ↥K = p ^ n
+```
+Note on the install: the first attempt cloned into `E:` and **stalled**, then `Remove-Item` and `rd /s /q` both
+hung for 20+ minutes on that tree (Defender real-time was already off). Renaming was instant, so the fix was to
+abandon that location and use `lake new ... math` on `B:` -- the supported path, which materialises mathlib as a
+dependency and leaves the oleans in the package's own build dir.
+
+#### THE COST NUMBER, AND A CORRECTION TO MY OWN FIRST MEASUREMENT
+My first measurement reported a **9.07x** batching win (0.8 s/claim versus 7.6 s/claim). **That number was
+wrong, and it was wrong in the flattering direction.** `lake env lean` accepts EXACTLY ONE file: given several
+it prints "Expected exactly one file name" plus a help screen and checks nothing. I benchmarked that help
+screen, and the code path implementing the batch reported every snippet as verified because no error line
+matched any file. A checker that converts total failure into all-pass is worse than no checker.
+
+Real numbers, measured after fixing it:
+```
+bare toolchain startup                            7.1 s
+import Mathlib + one statement                   52.6 s     <- import BREADTH dominates the cost
+import Mathlib.Algebra.Group.Even + one          18.5 s     <- 2.8x cheaper, narrowest that worked
+a failed import                                  6 - 9 s
+FOUR claims in ONE combined file                 52.7 s  = 13.2 s/claim
+four claims as four separate invocations        ~210 s   = ~52 s/claim
+```
+So batching is real but it is a **~4x saving, not 9x**, and what it buys is ONE shared import rather than one
+per claim. Cost tracks how much of Mathlib you import, not how many claims you check. Practical rule: pick the
+narrowest module that provides the lemmas, then batch on top of that; a `Mathlib`-wide import is a 50-second
+fixed cost per invocation and is almost never necessary.
+
+Against the other instruments:
+```
+arithmetic tier-1 check       < 1 ms/claim
+19M cross-encoder             10.2 ms/claim
+2.6B LLM                   2,200 ms/claim
+Mathlib, batched          13,167 ms/claim      <- 1,291x the encoder, 6.0x the LLM
+```
+**Mathlib is the most expensive instrument we own**, six times the LLM, and the only one whose answer is a
+proof rather than a score. It belongs on rows that arithmetic cannot touch, batched, never one process per row.
+
+#### TYPE 1 vs TYPE 2 IS THE BUG WE HAVE BEEN CHASING, AND NOW IT HAS A NAME
+The autoformalization literature splits:
+- **Type 1** -- the translation compiles because the steps were *adjusted*; the artifact is valid but does not
+  prove what the author wrote.
+- **Type 2** -- every definition, step and dependency matches the author's intent.
+
+**My `pi = pi` repair is the purest Type 1 artifact there is: it verifies perfectly and proves nothing.** The
+same failure underlies the tautology guard, the `2 + 2 = 5 -> 2 + 2 = 4` question (does the author's 5 mean
+`7 - 3`?), and the structure-check KEEPs on gold-REFUTED claims. A verified artifact is not a faithful one, and
+this project has now rediscovered that independently three times. The literature's discipline is the one to
+adopt: **a proof of a reformulated statement is not evidence about the original claim.**
+
+#### DECISION
+**Do not build the LLM autoformalization loop yet**, for three measured reasons:
+1. **Type-2 faithfulness cannot be measured here.** It needs human-judged formalisations, and the absent
+   held-out set is already the project's blocking defect. A loop we cannot evaluate is a loop that will silently
+   produce Type 1 artifacts at scale.
+2. **The economics are wrong on this hardware.** A repair loop is ~10 iterations x 1-2 k tokens; at 2.2 - 8.5
+   tok/s that is 20-40 minutes per proof, for a model small enough to be degenerate on our own 4-way task
+   (measured: one distinct label, accuracy = class prior).
+3. **Mathlib retrieval is a research problem, not a plumbing task.** Step 2 of the pipeline -- find the exact
+   `Group`/`Finite` definition -- is the hard part, and getting it wrong is exactly how Type 1 happens.
+
+**Do instead**, in order:
+- [ ] **Declared-mapping translator, one claim family only.** Pick a family whose formalisation is unambiguous
+  (divisibility / primality / simple order facts), write the mapping by hand, and let Lean check the result. The
+  mapping is *declared and reversible*, so faithfulness is true by construction rather than judged by a model.
+  This is Type 2 by design instead of by hope.
+- [ ] **Wire the existing bridge into the pipeline.** `lean_bridge` is unreachable; for propositional argument
+  rows it replaces `_chk_derivation`, which is currently a regex that looks for "therefore" and counts steps.
+  A kernel check beats a shape heuristic, and the cost (0.8 s batched) fits the medium-check tier.
+- [ ] **Persistent Lean server.** `lake env lean` pays a 7 s toolchain start plus imports per invocation. An LSP
+  session would amortise that across a whole batch and is the same trick that took the LLM from a reload per
+  call to one load. Expected to push 0.8 s/claim down substantially.
+- [ ] **Record the formalisation next to the verdict**, so a Type 1 artifact is visible as a *different
+  statement* rather than a wrong answer. A verdict that cannot show the statement it proved is unauditable.
+
+#### Limits, stated now so they are not discovered later
+Mathlib oleans are 1.7 GB and live outside the repo on `B:`; the repo does not depend on them and a fresh
+machine needs `lake new ... math` + `lake exe cache get` (~9 k files).
+The install proved fragile on `E:` in a way I could not diagnose beyond "file operations on that tree hang";
+`B:` worked immediately, so the plan pins the location.
+A Lean check is ~800x the cost of the arithmetic validator. It belongs on rows that arithmetic cannot touch.
