@@ -1004,3 +1004,78 @@ proposed pre-warmed Lean REPL pool.
 4. **Dedup + contamination control** -- strongest measured wins in the 2026 cleaning literature (SemDeDup
    halves data with minimal loss; n-gram decontamination is DEFEATED by paraphrase, so 13-gram + embedding +
    paraphrase passes are required; 8-18% HumanEval leak found in RedPajama/StarCoder).
+
+---
+
+### v9 GRPO ROUTER BUILT AND TUNED ON CPU; WORDNET WAS MY BUG (2026-10-29)
+
+#### 1. WordNet -- the user was right and I was wrong
+I claimed "canonical_predicate is unsalvageable: WordNet merges verb/noun senses -- cat shares synsets with
+barf and bozo, doctor with bushel." The data disagrees with my diagnosis:
+`
+cat     8 NOUN synsets, incl. guy.n.01 {guy, cat, hombre, bozo}, kat.n.01 {kat, khat, qat, quat, cat}
+cat(noun) INTERSECT barf(noun) = EMPTY        <- barf only collided via MY unioning across all synsets
+`
+The bug was mine. The correct method is standard WordNet practice: **restrict POS -> take the FIRST synset
+(WordNet orders by frequency) -> take the lemma with the highest sense-tagged count()**. Measured:
+cat->cat, dog->dog, doctor->doctor, physician->doctor, bushel->bushel. "Unsalvageable" was false.
+Also measured: nltk's lesk() is NOT a substitute -- it picks **kat.n.01 (the khat plant)** for "my cat is
+sitting on the mat" and **doctor_of_the_church.n.01** for "the doctor prescribed antibiotics". First-sense
+frequency wins; context WSD deliberately not used.
+**And the ternary router was never removed** -- alive at `refinery.py:157`, "Ternary routing with asymmetric
+costs". Verified before building anything.
+
+#### 2. The attached whitepaper WAS the design
+Algorithm 1, "GRPO Pattern Routing": `phi <- spaCy24(x); sample G=3; R = 0.4*DoD + 0.3*Latency + 0.3*Cost;
+A_i = (R_i-mu)/sigma; theta += eta*grad log pi*A_i`. The policy is a **softmax over a LINEAR function of 24
+spaCy features**, not a transformer -- which is exactly why it is sub-millisecond on CPU.
+
+**NEW: `tools/logos/nlp/pattern_router.py`** (12 self-tests). The 24 features are defined and named in the
+module because the paper does not list them. The 10 patterns are the instruments we actually own.
+`
+instrument         tier   cert%    mean ms   mean R
+arithmetic            1     31%       0.82    0.297
+dep_encoder           3      6%    2797.73    0.053
+escalate              0     56%       0.00    0.562
+selection accuracy 18.8% -> 56.2%   (18 updates, 14 zero-variance groups)
+decision latency 27.1 us            <- whitepaper reports 41 us
+`
+
+#### 3. Two inherited design flaws, both caught by tests
+**(a) THE PAPER'S REWARD INVERTS VERIFIER PRIORITY.** Measured:
+`reward_whitepaper(dod=0, ms=0.1, tier=0) = 0.600` (fast GUESS) beats
+`reward_whitepaper(dod=1, ms=13167, tier=6) = 0.400` (slow PROOF). DoD weighs 0.4 against 0.6 for
+Latency+Cost. The paper optimises harness DISPATCH, not verification. Fix: a **DoD GATE** -- no certificate
+scores exactly 0.0 however fast. Both behaviours are asserted in tests.
+**(b) ABSTENTION SCORED ZERO MADE THE REWARD TOO SPARSE.** First run: **23 of 32 groups had ZERO variance**
+and the router collapsed to a constant at 31.2% -- "always pick arithmetic" (5/16 of the fixture), the SAME
+degeneracy as the 2.6B model. Fix: if no certificate-bearing instrument can decide a row, **ESCALATE is
+correct and is rewarded**. Result **31.2% -> 56.2%**, zero-variance groups **23 -> 14**.
+
+#### 4. What the research settled on the rest of the request
+- **DSPy: RUNNABLE but PROVABLY A NO-OP on our model.** GEPA light = 460 metric calls (~25 min @350M, 2 h
+  @2.6B). But our 2.6B returns one label for all rows, so accuracy(theta) is CONSTANT and every optimizer's
+  objective is flat: MIPROv2 returns candidate 0, GEPA returns the seed, BootstrapFewShot keeps 0 demos.
+  Precedent: GEPA on a locally-served 27B "selects the seed and exactly reproduces baseline behavior".
+  Keep DSPy for a sub-task the model CAN do -- normalising a row into a formal obligation.
+- **GRPO: TRANSFORMER GRPO NEEDS A GPU; OUR ROUTER IS NOT THAT.** Every published reference point is 2-8x
+  A100 (TRL's own 0.5B quickstart: 8 GPUs, ~1 day); no CPU transformer-GRPO numbers exist. The v9 router is
+  REINFORCE on a linear softmax, gradient analytic in ~250 parameters -- that is why 27 us and 18 updates are
+  meaningful. **The distinction must be stated or the numbers get misread as "GRPO works on CPU".**
+- **SELF-LEARNING: only the verifier-gated branch.** V-STaR-style rejection sampling gated by our own
+  certificates measured **+4 to +17 points**. Failure modes to respect: **1.2% cheating rows** in SFT data is
+  enough for RL to converge to ~100% reward hacking; a degenerate model's majority vote is a PERMANENT wrong
+  majority (TTRL would train the degeneracy in); and validation-gain **REVERSAL** into held-out degradation
+  has been observed with an identical protocol -- undetectable here without a held-out set.
+- **CODE REPAIR: do not route through the LM.** Untrained 2.7B/3B copy their own buggy code VERBATIM in
+  **42.2%/64.8%** of cases under feedback pressure; the fix (CYCLE) needed **2x RTX 3090**. Assertion/logic
+  errors repair at only **45%** vs **77%** for name/syntax. So repair stays DETERMINISTIC: template + AST
+  rewrite driven by the diagnostic code.
+- **POISONING: provable checks yes, targeted poisoning NO.** MinHashLSH Jaccard **0.8** (13-gram, num_perm
+  128, as SlimPajama/RedPajama) PLUS a second pass at **0.5** for template repetition, plus reranker
+  entailment, plus cluster size. Backdoor detection needs a trained model's activations and is OUT OF SCOPE;
+  1% poisoning reaches 98.5% success and only 4.45% of poisoned rows are human-distinguishable.
+
+#### 5. Outstanding (in the todo)
+ConceptNet client + relations; deterministic linters/AST/IR repair evaluators; MinHash dedup module (0.8+0.5);
+and the **held-out canary set** -- now blocking three threads.

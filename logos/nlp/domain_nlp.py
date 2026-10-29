@@ -275,30 +275,59 @@ def same_predicate(a: str, b: str, pos: str = "n", lx=None) -> bool:
     return bool(sx & sy)
 
 
-def canonical_predicate(word: str, lx=None) -> str:
-    """The canonical surface form for a predicate, so synonyms become ONE predicate.
+_WN_POS = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}
 
-    "physician" and "doctor" share synsets; without this they are two unrelated unary predicates and a proof
-    about one says nothing about the other. The choice is the alphabetically first lemma in the shared synset
-    group, which is arbitrary but STABLE -- stability is what matters for logical identity.
+
+def canonical_predicate(word: str, pos: str = "n", lx=None) -> str:
+    """The canonical surface form for a predicate: MOST FREQUENT SENSE, HIGHEST-COUNT LEMMA.
+
+    I previously called this "unsalvageable" and blamed WordNet for merging parts of speech. THAT WAS WRONG,
+    and the WordNet data says so:
+
+        cat      8 NOUN synsets, incl. guy.n.01 {guy, cat, hombre, bozo} and
+                 kat.n.01 {kat, khat, qat, quat, cat, Arabian_tea}   <- real NOUN co-lemmas, not verb bleed
+        cat(noun) intersect barf(noun) = EMPTY                        <- barf only collided via my unioning
+
+    The bug was mine: I unioned lemma names across EVERY synset of the word, which merges unrelated senses by
+    construction. The correct method is standard WordNet practice and it works:
+
+        1. restrict to ONE part of speech
+        2. take the FIRST synset -- WordNet orders synsets by frequency of use
+        3. take the lemma with the highest `count()` (WordNet's sense-tagged frequency)
+
+    Measured: cat->cat, dog->dog, doctor->doctor, physician->doctor.
+
+    NOT Lesk. Measured here, nltk's lesk() picks kat.n.01 (the khat plant) for "my cat is sitting on the mat"
+    and doctor_of_the_church.n.01 for "the doctor prescribed antibiotics". First-sense frequency beats that
+    badly, so context-based WSD is deliberately NOT used.
     """
     lx = lx or bridge()
     w = (word or "").strip().lower().replace(" ", "_")
-    if not lx or not w:
+    if not w:
         return w
+    if w in NEVER_MERGE:
+        return w
+    wn = getattr(lx, "wn", None) if lx is not None else None
+    if wn is None:
+        try:
+            from nltk.corpus import wordnet as _wn
+            wn = _wn
+        except Exception:                                        # noqa: BLE001
+            return w
     try:
-        if lx.is_homonymous(w):
-            return w          # polysemous: merging senses we cannot distinguish would merge predicates
+        synsets = wn.synsets(w, pos=_WN_POS.get((pos or "n").lower(), "n"))
     except Exception:                                            # noqa: BLE001
         return w
+    if not synsets:
+        return w
     try:
-        syns = lx.synonyms(w)
+        lemmas = synsets[0].lemmas()
     except Exception:                                            # noqa: BLE001
         return w
-    if not syns:
+    if not lemmas:
         return w
-    group = sorted({s.replace("_", " ").split(".")[0] for s in syns} | {w})
-    return group[0].replace(" ", "_")
+    best = max(lemmas, key=lambda l: (l.count() or 0))
+    return best.name().lower().replace(" ", "_")
 
 
 def antonym_of(word: str, lx=None) -> set:
@@ -504,6 +533,36 @@ def run_self_test() -> bool:
         print("  [SKIP] Lexicon/WordNet unavailable")
         print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
         return ok
+
+    # --- CANONICALISATION, done the correct way: first synset, highest-count lemma.
+    #     (My earlier "unsalvageable" verdict was wrong -- the bug was unioning across all synsets.)
+    good = canonical_predicate("doctor", "n", lx) == "doctor"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] canonical(doctor) = {canonical_predicate('doctor', 'n', lx)!r}")
+
+    good = canonical_predicate("physician", "n", lx) == "doctor"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] canonical(physician) = {canonical_predicate('physician', 'n', lx)!r} "
+          f"(same predicate as doctor)")
+
+    good = canonical_predicate("cat", "n", lx) == "cat"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] canonical(cat) = {canonical_predicate('cat', 'n', lx)!r} "
+          f"(NOT 'bozo' -- the first noun synset is cat.n.01)")
+
+    good = canonical_predicate("dog", "n", lx) == "dog"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] canonical(dog) = {canonical_predicate('dog', 'n', lx)!r}")
+
+    good = canonical_predicate("doctor", "n", lx) != canonical_predicate("bushel", "n", lx)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] doctor and bushel canonicalise DIFFERENTLY "
+          f"({canonical_predicate('bushel', 'n', lx)!r})")
+
+    # --- the guard still holds: statistical vocabulary is never renamed into a neighbour
+    good = canonical_predicate("significant", "a", lx) == "significant"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] canonical(significant) is left alone")
 
     good = same_predicate("doctor", "physician", "n", lx)
     ok = ok and good
