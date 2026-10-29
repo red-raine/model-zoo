@@ -1144,3 +1144,66 @@ parent WebIsADb offers 400M unvalidated Hearst hypernyms -- a liability for prec
 1. **WIRE the cascade router into pipeline.py** as the tier selector -- still an orphan.
 2. **A held-out canary** -- without it, validation-gain reversal is undetectable.
 3. **MinHash dedup** (0.8 + second pass 0.5).
+
+---
+
+### USE THEM TOGETHER: ConceptNet + WordNet + FrameNet UNIONED, and the papers say so (2026-10-29)
+
+#### Process failure, stated first
+I had **not read** the last three links. I mined earlier sets via agents and silently skipped these, then wrote
+"ConceptNet is worse than WordNet" -- a false dichotomy built on that gap.
+
+#### What the three papers actually say
+- **L16-1132, Di Caro & Boella, LREC 2016** -- *Automatic Enrichment of WordNet with Common-Sense Knowledge*.
+  WordNet synsets are "often described by few definitions (or glosses) and examples", and "most approaches to
+  WSD fully rely on these short texts". The paper **enriches synsets with ConceptNet 5** definitions
+  disambiguated to WordNet: ~600K enrichments, high precision.
+  **This is the direct fix for a failure I measured and blamed on the resource**: plain Lesk scored the CORRECT
+  synset (cat.n.01) at **ZERO** signature overlap while `kat.n.01` (the khat plant) won on the stopwords "is"
+  and "the". The signatures are too short -- exactly the problem the paper names.
+- **s41324-026-00710-y** (Spatial Information Research) -- a rule-based spaCy branch and a transformer branch
+  **combined through a weighted fusion layer**, low-confidence cases kept for human review. Keyword coverage
+  78.7% -> 81.4%, place coverage 21.5% -> 43.3%. Fuse, do not rank against each other.
+- **ACM 3502739** -- **could not be read**: dl.acm.org returned 403 / bot_blocked. Stated rather than inferred.
+
+#### NEW: `tools/logos/nlp/lexicon_ensemble.py` -- unions with provenance, never a choice
+`antonyms()` / `synonyms()` = WordNet UNION ConceptNet, each relation **tagged with its source**;
+`corroborated()` = the subset BOTH assert; `verify_related()` = a LIST of claims with independent-source
+counts, not a verdict; `enriched_signature()` = gloss + examples + ConceptNet edges (the L16-1132 mechanism).
+`
+significant : antonyms_both = ['insignificant'],  synonyms_both = ['important']
+harmless    : antonyms_both = ['harmful']
+increase    : decrease, decrement [wordnet]  +  decline [conceptnet]
+nonlinear   : linear [wordnet]        unable : able [wordnet]
+`
+The `both` column is the payoff: **two independent vocabularies agreeing** is the only union that raises
+confidence -- the same discipline the truth store applies to validator implementations.
+
+#### A bug of mine that made the union look worse than it is
+Every lookup defaulted to `pos="n"`. Morphological negation lives in **adjectives**, so `antonyms("unable")`
+and `antonyms("nonlinear")` returned NOTHING and the union appeared worse than WordNet. The union was fine;
+the **query** was wrong. POS now defaults to ALL; `pos='n'` still restricts (tested).
+
+#### The WSD result, reported as noise rather than as a win
+`
+plain nltk lesk : 0/4 correct
+enriched        : 1/4 correct
+`
+I first wrote "ENRICHMENT HELPS (0 -> 1 of 4)". One flipped sentence on four cases is **noise**, and calling it
+a demonstration would be the overclaim this project keeps correcting. Corrected in the module: enrichment is a
+**candidate**; first-sense frequency (99.5% agreement with SemCor MFS) plus monosemy refusal stays the method.
+
+#### ConceptNet, now with the right conclusion
+The JSON API really is down (`api.conceptnet.io` 502 on /c/, /query, /related; `conceptnet.io` is a static
+shell linking to the dead host). The **data is alive**: 498 MB assertions file -> **34,074,917 lines streamed
+into a 12.6 MB local index in 166 s** -- 119,528 edges, **90.5% expert-sourced**, covering **25.1%** of our
+vocabulary. Local is *better* here: no network in the verification path, so a 502 cannot change a verdict.
+
+#### Todo state, stated explicitly
+- ConceptNet: **DONE** local index; **USED** as a union source with provenance.
+- WordNet: canonical sense `synsets(w,pos)[0]` (== SemCor MFS 99.5%); **monosemy refusal** for the 20.7%.
+- FrameNet: `frame_of`/`frame_elements` exposed via `lexical.Lexicon`; wire into the relational guard next.
+- Enriched signatures: **candidate**, needs a real WSD eval set before adoption.
+- spaCy lemmatizer: `lemma_exc` keyed by POS, with `attribute_ruler` pinning POS first (measured: 11 of 16
+  injected exceptions fired; the 6 misses were tokens the tagger labelled VERB).
+- **Open**: cascade router not wired into `pipeline.py`; held-out canary; MinHash dedup (0.8 + 0.5).
