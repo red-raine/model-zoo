@@ -51,8 +51,13 @@ _TOOLS = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-ARCHIVE = os.environ.get("LOGOS_ARCHIVE",
-                         os.path.join(os.path.expanduser("~"), ".cache", "logos_regression.json"))
+_REPO_BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_verdicts.json")
+ARCHIVE = os.environ.get(
+    "LOGOS_ARCHIVE",
+    # the REPO copy wins: a baseline that only exists in ~/.cache cannot be run by CI, and a gate only one
+    # machine can execute is half a gate.
+    _REPO_BASELINE if os.path.exists(_REPO_BASELINE)
+    else os.path.join(os.path.expanduser("~"), ".cache", "logos_regression.json"))
 ARCHIVE_VERSION = 2
 
 

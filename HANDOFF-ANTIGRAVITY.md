@@ -807,3 +807,56 @@ ratchet, not a proof, and it guards 76 rows -- a net, not a census.
 3. Pre-warmed Lean REPL pool: 13.2 s/claim becomes a warm constant.
 4. Proxy eval on ProofWriter-OWA5 and FOLIO (same categorical/Horn family). ProofWriter optimistic, FOLIO
    honest -- FoVer's 98.5% -> 73% gap is the calibration.
+
+---
+
+### ENCODER REFUSAL RATE: 99% REFUSED, AND THAT IS THE IMPROVEMENT (2026-10-28)
+
+#### Second label-free signal
+`fol_bridge.py --refusal` measures parse rate, shape coverage and a histogram of leading words among REFUSED
+claims. No human judgement needed -- like LOST_CORRECT, it is a signal we own outright.
+
+#### The first measurement was a problem
+300 real AVeriTeC claims: 9 parsed (3.0%). Reading the nine parses instead of trusting the rate showed at
+least four were WRONG:
+`
+"There is a scam involving Santander customers..."  -> subject = "there"    (existential, not an individual)
+"No news coverage was given to US President Trump"  -> subject = "new_coverage"   (news -> new)
+"Ivermectin is a treatment for coronavirus."        -> predicate "..._coronaviru"  (coronavirus)
+"All students in India who had to switch..."        -> a 100-char "predicate" that is really a clause
+`
+**A wrong parse is worse than a refusal**: a refusal costs coverage, a wrong parse produces a proof about a
+different sentence -- the exact Type-1 failure. 3% coverage at a ~50% parse-error rate is worse than 0%.
+
+#### Three fixes
+1. **Pseudo-subject refusal** -- there/it/this/that/these/those/here/what/which are not individuals.
+2. **Term complexity cap** -- <=3 subject words, <=5 predicate words. Beyond that it is a clause.
+3. **Singulariser corruption** -- naive "strip trailing s" made news->new and coronavirus->coronaviru. Words
+   ending -us/-is/-ss/-ous/-ics plus an exception list are left alone; men->man and reptiles->reptile still work.
+
+#### Result
+`
+             before        after
+parsed      9/300  3.0%    3/300  1.0%
+refused   291/300 97.0%  297/300 99.0%
+errors      ~4 of 9         0 of 3
+`
+**Two percentage points of coverage bought a parse-error rate of zero.** On a precision-first suite that is the
+right trade, and it was only visible because the refusal rate was measured and then the survivors were read.
+
+#### Baseline committed into the repo
+The archive lived in `~/.cache`, so CI could never run it -- a gate only one machine can execute is half a
+gate. Now at `tools/logos/verify/baseline_verdicts.json` (37.8 KB, 76 rows), repo copy preferred.
+Verified: 76/76 unchanged, KEEP 5 -> 5, PASSED.
+
+#### Consequence stated plainly
+The derivation check now fires on ~1% of real prose claims, so on a fact-checking corpus it contributes almost
+nothing. That is honest: it is an instrument for argument-shaped rows, and AVeriTeC is not that. A real
+capability with a narrow input population, not a general verifier.
+
+#### Next
+1. The refusal histogram IS the grammar roadmap -- add the highest-frequency shape that can be encoded
+   FAITHFULLY (not merely matched), and re-measure parse-error rate first, coverage second.
+2. Proxy eval on **ProofWriter-OWA5** and **FOLIO** -- both categorical/Horn, so they measure the encoder where
+   it is supposed to work, which AVeriTeC cannot.
+3. Pre-warmed Lean REPL pool.

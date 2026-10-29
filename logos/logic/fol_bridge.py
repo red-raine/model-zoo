@@ -58,6 +58,22 @@ _PLURAL_IRREGULAR = {"men": "man", "women": "woman", "children": "child", "peopl
                      "mice": "mouse", "geese": "goose", "teeth": "tooth", "feet": "foot"}
 
 _DETERMINERS = r"(?:all|every|each|any)"
+
+# A unary predicate is a SHORT noun phrase. Beyond this it is a clause, and encoding a clause as P(x) invents
+# a relation. Measured: the 300-row corpus produced subjects like
+# "student_in_india_who_had_to_switch_to_an_online_mode_of_education_due_to_the_coronaviru_pandemic".
+MAX_SUBJECT_WORDS = 3
+MAX_PREDICATE_WORDS = 5
+
+# Not individuals. "There is a scam ..." is an existential; encoding it as There(x) is a category error.
+PSEUDO_SUBJECTS = {"there", "it", "this", "that", "these", "those", "here", "what", "which"}
+
+# Singular nouns that end in -s and must NOT be stripped. Two of these were corrupted on real data.
+_S_ENDING_SINGULARS = {
+    "news", "series", "species", "means", "physics", "mathematics", "maths", "economics", "politics",
+    "ethics", "statistics", "analysis", "basis", "crisis", "thesis", "hypothesis", "coronavirus", "virus",
+    "consensus", "census", "status", "apparatus", "gas", "bus", "class", "process", "address", "business",
+}
 _NEG_DET = r"(?:no|no single)"
 
 PATTERNS = [
@@ -112,6 +128,10 @@ def _norm_term(t: str) -> str:
     for w in re.split(r"\s+", t):
         if w in _PLURAL_IRREGULAR:
             w = _PLURAL_IRREGULAR[w]
+        elif w in _S_ENDING_SINGULARS:
+            pass                                  # news, coronavirus, analysis: already singular
+        elif len(w) > 3 and w.endswith(("us", "is", "ss", "ous", "ics")):
+            pass                                  # virus, basis, class, famous, physics
         elif len(w) > 3 and w.endswith("ies"):
             w = w[:-3] + "y"
         elif len(w) > 3 and w.endswith("es") and w[-3] in "sxz":
@@ -156,6 +176,23 @@ def parse_sentence(text: str) -> dict:
                "predicate": _norm_term(pred), "negated": neg, "text": s}
         if not out["subject"] or not out["predicate"]:
             return {"status": UNPARSEABLE, "text": text, "reason": "a term normalised to empty"}
+
+        # ---- pseudo-subject: an existential wearing a subject's clothes
+        first_word = re.split(r"[\s_]", subj.strip().lower())[0] if subj.strip() else ""
+        if first_word in PSEUDO_SUBJECTS:
+            return {"status": UNPARSEABLE, "text": text,
+                    "reason": f"subject {first_word!r} is not an individual (existential or deictic); "
+                              f"encoding it as a unary predicate would invent a thing"}
+
+        # ---- complexity cap: a clause is not a predicate
+        n_sub = len(re.split(r"\s+", subj.strip()))
+        n_pred = len(re.split(r"\s+", pred.strip()))
+        if n_sub > MAX_SUBJECT_WORDS or n_pred > MAX_PREDICATE_WORDS:
+            return {"status": UNPARSEABLE, "text": text,
+                    "reason": f"term too complex for a unary predicate ({n_sub} subject word(s), "
+                              f"{n_pred} predicate word(s); caps are {MAX_SUBJECT_WORDS} and "
+                              f"{MAX_PREDICATE_WORDS}). A clause encoded as P(x) asserts a relation it "
+                              f"does not have"}
         return out
     return {"status": UNPARSEABLE, "text": text,
             "reason": "no declared pattern matched; this module does not guess encodings"}
@@ -519,6 +556,69 @@ def measure() -> int:
 
 
 # ------------------------------------------------------------------ self test
+def refusal_report(corpus_path: str = "", limit: int = 300) -> int:
+    """How much of a REAL corpus can the declared grammar encode? Needs no labels.
+
+    This is the second quality signal we own outright. LOST_CORRECT answers "did I break something?"; this
+    answers "where should the grammar grow next?", and both are measurable without a single human judgement.
+
+    A LOW rate is the honest expected result on a fact-checking corpus: those rows are prose claims, not
+    arguments, and this encoder deliberately covers only the categorical/Horn family. The value is not the
+    headline number -- it is the histogram of what failed, which names the next pattern to add and stops us
+    widening the grammar on intuition.
+    """
+    import collections
+
+    path = corpus_path or os.environ.get("LOGOS_CORPUS", r"B:\datasets\forge\verifier-av\dev.jsonl")
+    if not os.path.exists(path):
+        print(f"corpus not found: {path}")
+        return 1
+    try:
+        from logos import corpus_sizing
+        rows = corpus_sizing.load_corpus(path, limit)
+    except Exception as e:                                    # noqa: BLE001
+        print(f"could not load corpus: {type(e).__name__}: {e}")
+        return 1
+
+    print(f"=== encoder refusal rate on a real corpus ({len(rows)} rows) ===")
+    print(f"  {path}")
+    print(f"  corpus type: prose fact claims. This encoder covers only the categorical/Horn family, so a low")
+    print(f"  rate is the expected and honest result -- the histogram below is the useful part.\n")
+
+    parsed, unparsed = 0, 0
+    shapes = collections.Counter()
+    failed_first_word = collections.Counter()
+    samples = []
+    for r in rows:
+        p = parse_sentence(r["claim"])
+        if p["status"] == "PARSED":
+            parsed += 1
+            shapes[p["kind"]] += 1
+        else:
+            unparsed += 1
+            words = re.findall(r"[A-Za-z][\w'\-]*", r["claim"])
+            if words:
+                failed_first_word[words[0].lower()] += 1
+            if len(samples) < 8:
+                samples.append(r["claim"][:90])
+
+    n = len(rows)
+    print(f"  parsed    {parsed}/{n} = {parsed / n:.1%}")
+    print(f"  refused   {unparsed}/{n} = {unparsed / n:.1%}   <- refused, never guessed")
+    if shapes:
+        print(f"\n  shape coverage: {dict(shapes)}")
+    print("\n  most common leading words among REFUSED claims (where the grammar should grow next):")
+    for w, c in failed_first_word.most_common(12):
+        print(f"    {w:18s} {c:4d}")
+    print("\n  sample refusals:")
+    for s_ in samples:
+        print(f"    {s_!r}")
+    print("\n  READING THIS: the refusal rate is a FEATURE METRIC, not a failure. Every refusal is a row we")
+    print("  decline to encode rather than encode wrongly, and encoding wrongly is how a proof ends up being")
+    print("  about a different sentence than the one on the page. Grow the patterns from this histogram.")
+    return 0
+
+
 def run_self_test() -> bool:
     print("logos.logic.fol_bridge - SELF TEST")
     ok = True
@@ -642,6 +742,29 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] the negation ledger balances ({r.get('negation_ledger')})")
 
+    # --- REGRESSION, found on 300 real claims: "There is a scam ..." is an EXISTENTIAL, not an individual.
+    p = parse_sentence("There is a scam involving Santander customers")
+    good = p["status"] == UNPARSEABLE and "existential" in p["reason"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 'There is ...' is refused (subject 'there' is not an individual)")
+
+    # --- REGRESSION: naive singularisation turned "news" into "new" and "coronavirus" into "coronaviru".
+    good = _norm_term("news") == "news" and _norm_term("coronavirus") == "coronavirus"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 'news' and 'coronavirus' are not corrupted by the singulariser")
+
+    # --- and real plurals still collapse, so the Socrates syllogism keeps working
+    good = _norm_term("men") == "man" and _norm_term("reptiles") == "reptile"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] legitimate plurals still singularise (men->man, reptiles->reptile)")
+
+    # --- REGRESSION: a clause must not be encoded as a unary predicate
+    p = parse_sentence("All students in India who had to switch to an online mode of education are provided "
+                       "free smartphones by the government")
+    good = p["status"] == UNPARSEABLE and "too complex" in p["reason"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an over-long term is refused as a predicate")
+
     # --- FAIL CLOSED: English that matches no declared pattern is UNPARSEABLE, never a guess
     r = check_argument(["Bananas are tasty"], "All fruits are tasty")
     good = r["status"] == UNPARSEABLE
@@ -701,9 +824,13 @@ def main(argv=None) -> int:
     ap.add_argument("--arg", default="")
     ap.add_argument("--premise", action="append", default=[])
     ap.add_argument("--conclusion", default="")
+    ap.add_argument("--refusal", nargs="?", const="", default=None,
+                    help="measure the encoder refusal rate on a corpus (path optional)")
     args = ap.parse_args(argv)
     if args.self_test:
         return 0 if run_self_test() else 1
+    if args.refusal is not None:
+        return refusal_report(args.refusal)
     if args.measure:
         return measure()
     if args.arg:
