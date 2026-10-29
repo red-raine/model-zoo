@@ -1079,3 +1079,68 @@ correct and is rewarded**. Result **31.2% -> 56.2%**, zero-variance groups **23 
 #### 5. Outstanding (in the todo)
 ConceptNet client + relations; deterministic linters/AST/IR repair evaluators; MinHash dedup module (0.8+0.5);
 and the **held-out canary set** -- now blocking three threads.
+
+---
+
+### THE ROUTER HAD NO CONTEXT; THE CASCADE WAS THE HAMMER (2026-10-29)
+
+#### Factual first: the cascade was NOT replaced
+`pipeline.py` still routes via `triage.triage` unchanged; `refinery.py`'s ternary router is alive at
+line 157; `pattern_router.py` is imported by **NOTHING**. So the cascade was not abandoned -- but an unused
+router is the exact orphan pattern this project keeps finding (row_eval, lean_bridge, logic/channel, lexical).
+
+#### The real defect: the router was fed 24 surface word counts and nothing else
+`
+phis = [spacy24(r["text"]) for r in rows]     <- no ontology, no instrument knowledge, no cheap-tier result,
+                                                 no evidence gate, no truth-store hit
+`
+And the measurement shows it in both directions:
+`
+fixed cascade : certified 16/16 at 35 ms
+surface router: certified  9/16 at ~0 ms     <- ABSTAINED on 5 rows arithmetic already certifies
+`
+**It was a SHIRKER, not a hammer.** With no context it could not distinguish "nothing can decide this" from
+"arithmetic already did", and the abstention reward made stopping look safe.
+
+#### Fix: context + a different action space (CascadeRouter)
+- **features (12) = CASCADE STATE**: cheap tier certified/refuted/declined, has_equals, numeric density,
+  ontology_hits over our 5,937 terms, WordNet-known ratio, scope_ambiguous, n_clauses, length.
+- **actions = STOP or escalate to tier k** -- not "pick one of ten instruments".
+- **reward = the CHEAPEST tier that certifies**: stopping below it = 0.0 (SHIRKING); escalating above it is
+  penalised (WASTE); **stopping when NOTHING can certify = 1.0 (no model needed, correctly)**.
+
+Measured after the fix:
+`
+fixed cascade : certified 7/16 at 118,785 ms
+context router: certified 7/16 at     386 ms      <- SAME COVERAGE, 308x cheaper
+shirking 2 -> 0      waste 5/16
+`
+**THE CASCADE WAS THE HAMMER**: it burned 13 s of Mathlib on every undecidable row to reach the same 7
+certificates. 7/16 is the honest number -- only 7 of 16 fixture rows have a real certificate at all.
+
+#### Three literature corrections, all applied
+1. **`token_match` was a risk I had just introduced.** spaCy checks it BEFORE infix splitting and tests only
+   truthiness, so a PREFIX match claims the whole whitespace run (measured: glues punctuation, breaks
+   `to_bytes()`). Replaced with the documented safe route -- **remove the letter-hyphen INFIX**. Measured:
+   `macro-F1`, `bge-reranker-v2-m3`, `SNOMED-CT` become atomic; `http://x.com/a-b`,
+   `en_core_web_sm`, `config.yaml` and the range `10-20` still split correctly.
+2. **Lesk is worse than I measured, and now explained**: the CORRECT synset for "my cat is sitting on the mat"
+   scores **ZERO** signature overlap while `kat.n.01` (the khat plant) wins on the stopwords "is" and "the".
+   No IDF, no frequency prior. A 16-32% method.
+3. **WordNet first synset == SemCor MFS 99.5%** of the time (13,484 lemma/POS pairs) -> `synsets(w,pos)[0]`
+   is correct. But only **79.3%** of lemma names are monosemous, so added the **monosemy rule**: a polysemous
+   word is NOT renamed (first-sense WSD is ~65%, and a wrong merge makes two predicates identical, after which
+   a real contradiction looks consistent). `canonical(bank) = "bank"`.
+
+#### Rejected, with reasons
+ConceptNet: 475 MiB, api returned 502 three times, repo last commit 2021-09-07; only live client is
+`conceptnet-lite` 0.2.0, coverage ~zero on technical jargon. spacy-wordnet: pins **nltk<3.6**, we have 3.9.4
+-- unsatisfiable; use `wn` 1.1.1 (2026). Mowgli: project page, no API or download. WebIsALOD: host dead; its
+parent WebIsADb offers 400M unvalidated Hearst hypernyms -- a liability for precision-first. Graph WSD
+(UKB/PageRank): **67.3 vs 65.2** for taking sense #1, i.e. +2.1 F1 for a hand-rolled PageRank. spaCy is
+**3.8.18** (2026-10-26); we have 3.8.13; there is no v4.
+
+#### Next, in order
+1. **WIRE the cascade router into pipeline.py** as the tier selector -- still an orphan.
+2. **A held-out canary** -- without it, validation-gain reversal is undetectable.
+3. **MinHash dedup** (0.8 + second pass 0.5).

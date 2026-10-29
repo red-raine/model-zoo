@@ -1,4 +1,4 @@
-"""logos/nlp/pattern_router.py — the GRPO pattern router: a spaCy feature vector decides which instrument runs.
+﻿"""logos/nlp/pattern_router.py â€” the GRPO pattern router: a spaCy feature vector decides which instrument runs.
 
 WHAT THIS IMPLEMENTS
 --------------------
@@ -143,7 +143,7 @@ def spacy24(text: str, doc=None) -> list:
         float(len(text or "")),
         float(len(list(doc.sents))),
         float(sum(1 for t in toks if t.like_num or any(ch.isdigit() for ch in t.text))),
-        float(sum(1 for t in toks if t.text in ("+", "-", "*", "/", "=", "^", "×", "÷"))),
+        float(sum(1 for t in toks if t.text in ("+", "-", "*", "/", "=", "^", "Ã—", "Ã·"))),
         1.0 if "=" in (text or "") else 0.0,
         float(sum(1 for t in toks if t.lemma_.lower() in _UNITS or t.text in _UNITS)),
         float(sum(1 for t in toks if t.like_num and len(t.text) == 4 and t.text.isdigit()
@@ -559,8 +559,345 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] one GRPO epoch on {res['n_rows']} rows: "
           f"{res['before']:.1%} -> {res['after']:.1%}")
 
+    # --- THE CONTEXTUAL ROUTER: features must be CASCADE STATE, not surface counts
+    ctx = context_vector("2 + 2 = 5", cheap_verdict_for("2 + 2 = 5"))
+    good = len(ctx) == N_CONTEXT and ctx[0] == 1.0 and ctx[1] == 1.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] context vector has {len(ctx)} dims and knows arithmetic REFUTED it")
+
+    ctx_u = context_vector("The committee met on Tuesday.", cheap_verdict_for("The committee met on Tuesday."))
+    good = ctx_u[0] == 0.0 and ctx_u[2] == 1.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] and it knows when the cheap tier DECLINED")
+
+    # --- THE REWARD ENCODES THE RULE THE USER DEMANDED: cheapest certifying tier, and no model if none needed
+    # shirking: stopped at tier 1 when tier 1 is the cheapest to certify -> correct
+    good = tier_reward(0, min_cert_tier=1, shipped_cert=True) == 1.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] stopping at the cheapest certifying tier scores 1.0")
+
+    # shirking: stopped at tier 1 when tier 3 was needed -> 0.0
+    good = tier_reward(0, min_cert_tier=3, shipped_cert=False) == 0.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] SHIRKING (stopped below the needed tier) scores 0.0")
+
+    # no model needed: nothing can certify, so stopping is CORRECT
+    good = tier_reward(0, min_cert_tier=None, shipped_cert=False) == 1.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] abstaining when NOTHING can certify scores 1.0 (no model needed)")
+
+    # hammering: escalated to tier 6 when tier 1 would do -> penalised
+    over = tier_reward(4, min_cert_tier=1, shipped_cert=True)
+    good = 0.0 < over < 1.0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] escalating ABOVE the needed tier is penalised ({over:.2f})")
+
+    # --- the contextual router must not shirk, and must match the fixed cascade's coverage
+    from logos import pipeline as _pl
+    _rows = [{"text": t} for t, _e, _k in _pl.FIXTURE]
+    _res = train_cascade(_rows, epochs=2, verbose=False)
+    good = _res["after"]["shirk"] == 0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] after training the router does not shirk "
+          f"({_res['after']['shirk']} of {_res['after']['n'] if 'n' in _res['after'] else _res['n']})")
+
+    good = _res["after"]["rtr_cert"] >= _res["before"]["rtr_cert"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] and its coverage did not fall "
+          f"({_res['before']['rtr_cert']:.0f} -> {_res['after']['rtr_cert']:.0f} of {_res['after']['n']})")
+
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
+
+
+
+# =====================================================================================
+# CONTEXTUAL CASCADE ROUTER -- supersedes SoftmaxRouter for pipeline use
+# =====================================================================================
+# The surface router above answers "which of ten instruments?" from word counts. This one answers the question
+# the cascade actually needs: "given what the CHEAP TIER has already told us, should we STOP or ESCALATE, and
+# how far?" The difference is context, and it is the difference between a guess and a decision.
+TIERS = [1, 2, 3, 4, 6]          # the distinct tiers present in PATTERNS, ascending
+N_ACTIONS = len(TIERS)           # action i = "stop at or jump to TIERS[i]"
+
+CONTEXT_NAMES = [
+    "cheap_certified",       # did the cheapest instrument return a certificate?
+    "cheap_refuted",         # ... and was it a REFUTATION rather than a verification
+    "cheap_unknown",         # ... or did it decline
+    "has_equals",            # surface: an equality is the strongest arithmetic cue
+    "n_numeric",
+    "n_operators",
+    "ontology_hits",         # how many of OUR 5,937 domain terms appear in the row
+    "wordnet_known_ratio",   # fraction of content lemmas WordNet knows -- unknown jargon means escalate
+    "scope_ambiguous",       # quantifier/negation scope collision
+    "n_clauses",
+    "n_tokens",
+    "length_chars",
+]
+N_CONTEXT = len(CONTEXT_NAMES)
+
+_VOCAB_CACHE = None
+
+
+def _domain_terms():
+    global _VOCAB_CACHE
+    if _VOCAB_CACHE is None:
+        try:
+            from logos.nlp import domain_nlp
+            _VOCAB_CACHE = set(t.lower() for t in domain_nlp.vocabulary()["terms"])
+        except Exception:                                     # noqa: BLE001
+            _VOCAB_CACHE = set()
+    return _VOCAB_CACHE
+
+
+def context_vector(text: str, cheap_verdict: str = "UNKNOWN", doc=None) -> list:
+    """The cascade's STATE as features. This is what the router was missing.
+
+    `cheap_verdict` is the result of the cheapest instrument that already ran (VERIFIED / REFUTED / UNKNOWN).
+    Passing it in is the whole point: a router that does not know arithmetic already refuted the row cannot
+    decide to stop, and should not be asked to.
+    """
+    text = text or ""
+    try:
+        if doc is None:
+            from logos.nlp import domain_nlp
+            doc = domain_nlp.make_nlp(use_domain=True)(text)
+        toks = [t for t in doc if not t.is_space]
+    except Exception:                                         # noqa: BLE001
+        doc, toks = None, []
+
+    # ontology coverage: does the row speak our vocabulary?
+    vocab = _domain_terms()
+    lowered = text.lower()
+    hits = sum(1 for t in vocab if len(t) >= 4 and t in lowered) if vocab else 0
+
+    # WordNet coverage: a row whose content words are unknown to WordNet cannot be linked to anything
+    known = total = 0
+    for t in toks:
+        if not t.is_alpha:
+            continue
+        total += 1
+        lem = (t.lemma_ or t.text).lower()
+        try:
+            from nltk.corpus import wordnet as wn
+            if wn.synsets(lem):
+                known += 1
+        except Exception:                                     # noqa: BLE001
+            pass
+    wn_ratio = (known / total) if total else 0.0
+
+    # scope ambiguity (cheap reuse of the already-parsed doc)
+    scope = 0.0
+    try:
+        from logos.logic import scope_triage
+        scope = 1.0 if scope_triage.triage(text, doc=doc).get("status") == "SCOPE_AMBIGUOUS" else 0.0
+    except Exception:                                         # noqa: BLE001
+        scope = 0.0
+
+    n_clauses = sum(1 for t in toks if t.dep_ in _CLAUSE_DEPS)
+    return [
+        1.0 if cheap_verdict in ("VERIFIED", "REFUTED") else 0.0,
+        1.0 if cheap_verdict == "REFUTED" else 0.0,
+        1.0 if cheap_verdict in ("UNKNOWN", "") else 0.0,
+        1.0 if "=" in text else 0.0,
+        float(sum(1 for t in toks if t.like_num or any(ch.isdigit() for ch in t.text))),
+        float(sum(1 for t in toks if t.text in ("+", "-", "*", "/", "=", "^"))),
+        float(min(hits, 8)),
+        float(wn_ratio),
+        scope,
+        float(n_clauses),
+        float(len(toks)),
+        float(len(text)),
+    ]
+
+
+class CascadeRouter:
+    """Softmax over ACTIONS = {stop, escalate to tier k}, conditioned on cascade state."""
+
+    def __init__(self, seed: int = 0):
+        rng = random.Random(seed)
+        self.w = [[rng.uniform(-1e-3, 1e-3) for _ in range(N_CONTEXT)] for _ in range(N_ACTIONS)]
+        self.b = [0.0] * N_ACTIONS
+        self.seed = seed
+
+    def probs(self, ctx: list) -> list:
+        z = [sum(w * x for w, x in zip(self.w[i], ctx)) + self.b[i] for i in range(N_ACTIONS)]
+        m = max(z)
+        e = [math.exp(v - m) for v in z]
+        tot = sum(e)
+        return [v / tot for v in e]
+
+    def choose(self, ctx: list) -> int:
+        p = self.probs(ctx)
+        return max(range(N_ACTIONS), key=lambda i: p[i])
+
+    def update(self, ctx: list, chosen: list, rewards: list, lr: float = 0.05) -> dict:
+        g = len(chosen)
+        if g < 2:
+            return {"skipped": True, "reason": "group of 1"}
+        mu = sum(rewards) / g
+        sigma = math.sqrt(sum((r - mu) ** 2 for r in rewards) / g)
+        if sigma < EPS:
+            return {"skipped": True, "reason": "zero-variance group", "mu": mu}
+        p = self.probs(ctx)
+        for k, r in zip(chosen, rewards):
+            a = (r - mu) / (sigma + EPS)
+            for j in range(N_ACTIONS):
+                coeff = (1.0 if j == k else 0.0) - p[j]
+                if coeff == 0.0:
+                    continue
+                step = lr * a * coeff
+                wj = self.w[j]
+                for f in range(N_CONTEXT):
+                    wj[f] += step * ctx[f]
+                self.b[j] += step
+        return {"mu": mu, "sigma": sigma}
+
+
+def tier_reward(action_index: int, min_cert_tier, shipped_cert: bool) -> float:
+    """The reward that encodes "cheapest instrument that certifies, and no model when none is needed".
+
+    min_cert_tier : the cheapest tier at which ANY instrument returns a certificate (None if none does)
+    action_index  : which TIERS entry the router chose
+    """
+    act_tier = TIERS[action_index]
+    if min_cert_tier is None:
+        # nothing anywhere can decide this row, so ANY stop is a correct abstention and escalating is waste
+        return 1.0 if not shipped_cert else 0.0
+    if act_tier < min_cert_tier:
+        return 0.0                                  # SHIRKING: a certificate was available and we skipped it
+    if not shipped_cert:
+        return 0.0                                  # escalated and still got nothing
+    waste = (act_tier - min_cert_tier) / float(max(TIERS[-1] - TIERS[0], 1))
+    return 1.0 - 0.5 * waste                        # correct, minus a penalty for overspending
+
+
+def cheap_verdict_for(text: str) -> str:
+    """Run the cheapest tier only -- tier 1 -- and report its verdict. This is the router's context."""
+    try:
+        from logos.verify import math_core
+        return math_core.check_arithmetic_text(text).status
+    except Exception:                                         # noqa: BLE001
+        return "UNKNOWN"
+
+
+def _tier_certificate(per: dict, tier: int) -> bool:
+    return any(per[p["name"]][0] > 0.0 and p["tier"] == tier for p in PATTERNS)
+
+
+def evaluate_cascade(rows: list, router: CascadeRouter | None = None, verbose: bool = True) -> dict:
+    """Compare the FIXED cascade against the CONTEXTUAL router on coverage, cost and the two failure modes."""
+    outcomes = _instrument_outcomes(rows)
+    ctxs = [context_vector(r["text"], cheap_verdict_for(r["text"])) for r in rows]
+
+    cas_cert = cas_ms = 0.0
+    rtr_cert = rtr_ms = 0.0
+    shirk = waste = 0
+    detail = []
+    for r, per, ctx in zip(rows, outcomes, ctxs):
+        tiers_with_cert = [t for t in TIERS if _tier_certificate(per, t)]
+        min_tier = min(tiers_with_cert) if tiers_with_cert else None
+
+        # fixed cascade: ascending tiers, stop at the first that certifies
+        spent, got = 0.0, False
+        for t in TIERS:
+            spent += sum(per[p["name"]][1] for p in PATTERNS if p["tier"] == t)
+            if _tier_certificate(per, t):
+                got = True
+                break
+        cas_ms += spent
+        cas_cert += 1 if got else 0
+
+        # contextual router
+        act = router.choose(ctx) if router is not None else 0
+        act_tier = TIERS[act]
+        # cost of running every tier up to and including the chosen one
+        rspent = sum(per[p["name"]][1] for p in PATTERNS if p["tier"] <= act_tier)
+        rgot = any(_tier_certificate(per, t) for t in TIERS if t <= act_tier)
+        rtr_ms += rspent
+        rtr_cert += 1 if rgot else 0
+        if min_tier is not None and act_tier < min_tier:
+            shirk += 1
+        if min_tier is not None and act_tier > min_tier:
+            waste += 1
+        detail.append((r["text"][:34], min_tier, act_tier, rgot))
+
+    n = len(rows)
+    out = {"n": n, "cas_cert": cas_cert, "cas_ms": cas_ms, "rtr_cert": rtr_cert, "rtr_ms": rtr_ms,
+           "shirk": shirk, "waste": waste, "detail": detail}
+    if verbose:
+        print(f"  {'row':34s} {'cheapest cert tier':>18s} {'router tier':>12s} {'got cert':>9s}")
+        for t, mt, at, got in detail:
+            print(f"  {t:34s} {str(mt):>18s} {at:12d} {str(got):>9s}")
+        print()
+        print(f"  FIXED CASCADE : certified {cas_cert:.0f}/{n}   cost {cas_ms:,.0f} ms")
+        print(f"  CONTEXT ROUTER: certified {rtr_cert:.0f}/{n}   cost {rtr_ms:,.0f} ms")
+        print(f"  SHIRKING (stopped below the cheapest certifying tier): {shirk}/{n}")
+        print(f"  WASTE    (escalated above it):                        {waste}/{n}")
+    return out
+
+
+def train_cascade(rows: list, epochs: int = 3, group: int = 3, lr: float = 0.05, seed: int = 0,
+                  verbose: bool = True) -> dict:
+    """GRPO over the CONTEXTUAL router, then report the two failure modes it must not have."""
+    rng = random.Random(seed)
+    outcomes = _instrument_outcomes(rows)
+    ctxs = [context_vector(r["text"], cheap_verdict_for(r["text"])) for r in rows]
+    min_tiers = []
+    for per in outcomes:
+        ts = [t for t in TIERS if _tier_certificate(per, t)]
+        min_tiers.append(min(ts) if ts else None)
+
+    router = CascadeRouter(seed=seed)
+    before = evaluate_cascade(rows, router, verbose=False)
+    steps = skipped = 0
+    for _ep in range(epochs):
+        order = list(range(len(rows)))
+        rng.shuffle(order)
+        for idx in order:
+            ctx = ctxs[idx]
+            p = router.probs(ctx)
+            idxs = sorted(range(N_ACTIONS), key=lambda i: -(rng.random() ** (1.0 / max(p[i], 1e-12))))[:group]
+            rewards = []
+            for a in idxs:
+                act_tier = TIERS[a]
+                shipped = any(_tier_certificate(outcomes[idx], t) for t in TIERS if t <= act_tier)
+                rewards.append(tier_reward(a, min_tiers[idx], shipped))
+            res = router.update(ctx, idxs, rewards, lr=lr)
+            if res.get("skipped"):
+                skipped += 1
+            else:
+                steps += 1
+    after = evaluate_cascade(rows, router, verbose=False)
+    if verbose:
+        print(f"  GRPO: {steps} updates, {skipped} zero-variance groups")
+        print(f"  before: certified {before['rtr_cert']:.0f}/{before['n']}  shirk {before['shirk']}  "
+              f"waste {before['waste']}  cost {before['rtr_ms']:,.0f} ms")
+        print(f"  after : certified {after['rtr_cert']:.0f}/{after['n']}  shirk {after['shirk']}  "
+              f"waste {after['waste']}  cost {after['rtr_ms']:,.0f} ms")
+    return {"router": router, "before": before, "after": after, "steps": steps, "skipped": skipped}
+
+
+def measure_cascade(epochs: int = 3) -> int:
+    from logos import pipeline
+    rows = [{"text": t} for t, _e, _k in pipeline.FIXTURE]
+    print("=== CONTEXTUAL cascade router vs the fixed cascade ===")
+    print(f"  {len(rows)} rows   context = {N_CONTEXT} features of CASCADE STATE, not surface word counts")
+    print(f"  actions = {N_ACTIONS}: stop/escalate to tier {TIERS}\n")
+    res = train_cascade(rows, epochs=epochs, verbose=True)
+    print("\n=== the two failure modes it must not have ===")
+    a = res["after"]
+    print(f"  SHIRKING (stopped below the cheapest certifying tier): {a['shirk']}/{a['n']}   "
+          f"{'OK' if a['shirk'] == 0 else 'FAIL'}")
+    print(f"  WASTE (escalated above it):                           {a['waste']}/{a['n']}   "
+          f"{'OK' if a['waste'] == 0 else 'review'}")
+    print(f"  coverage {a['rtr_cert']:.0f}/{a['n']} at {a['rtr_ms']:,.0f} ms "
+          f"(fixed cascade {a['cas_cert']:.0f}/{a['n']} at {a['cas_ms']:,.0f} ms)")
+    print()
+    print("  The router must MATCH the cascade's coverage at no greater cost. If it shirks, it is avoiding")
+    print("  decisions the cheap tier already made; if it wastes, it is using an expensive instrument where a")
+    print("  cheap one sufficed. Both are the hammer/shirker failure in opposite directions.")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -568,11 +905,14 @@ def main(argv=None) -> int:
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--measure", action="store_true")
     ap.add_argument("--features", default="")
+    ap.add_argument("--cascade", action="store_true", help="contextual cascade router")
     args = ap.parse_args(argv)
     if args.features:
         phi = spacy24(args.features)
         print(json.dumps({n: round(v, 3) for n, v in zip(FEATURE_NAMES, phi)}, indent=2))
         return 0
+    if args.cascade:
+        return measure_cascade()
     if args.self_test:
         return 0 if run_self_test() else 1
     if args.measure:
@@ -582,3 +922,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

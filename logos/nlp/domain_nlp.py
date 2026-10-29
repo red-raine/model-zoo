@@ -204,21 +204,26 @@ def make_nlp(use_domain: bool = True, model: str = ""):
         # measured compile-time hazard, and the terms that actually corrupt a parse are the long, hyphenated
         # and versioned ones -- a short ordinary word survives tokenisation anyway.
         _t = _time.perf_counter()
-        high_value = [t for t in (mangled or []) if len(t) >= 5]
-        _phases["select"] = round(_time.perf_counter() - _t, 2)
-        if high_value:
-            _t = _time.perf_counter()
-            longest_first = sorted(high_value, key=len, reverse=True)
-            pattern = "|".join(re.escape(t) for t in longest_first)
-            _phases["join"] = round(_time.perf_counter() - _t, 2)
-            _t = _time.perf_counter()
-            rx = re.compile(pattern)
-            _phases["compile"] = round(_time.perf_counter() - _t, 2)
-            _t = _time.perf_counter()
-            nlp.tokenizer.token_match = rx.match
-            _phases["assign"] = round(_time.perf_counter() - _t, 2)
+        removed = 0
+        try:
+            from spacy.util import compile_infix_regex
+            kept_infixes = []
+            for pat in nlp.Defaults.infixes:
+                # the letter-hyphen splitter is the one whose hyphen sits in an alternation class:
+                #   (?<=[letters])(?:-|–|—|--|---|——|~)(?=[letters])
+                # Dropping it keeps "macro-F1" and "SNOMED-CT" whole, while a standalone " - " and a
+                # numeric range "10-20" still split, because those are not letter-hyphen-letter.
+                if "(?:-|" in pat:
+                    removed += 1
+                    continue
+                kept_infixes.append(pat)
+            if removed:
+                nlp.tokenizer.infix_finditer = compile_infix_regex(kept_infixes).finditer
+        except Exception:                                        # noqa: BLE001
+            removed = 0
+        _phases["hyphen_infix"] = round(_time.perf_counter() - _t, 2)
         nlp.meta["logos_domain_terms"] = len(mangled or [])
-        nlp.meta["logos_domain_installed"] = len(high_value)
+        nlp.meta["logos_hyphen_infix_removed"] = removed
         nlp.meta["logos_domain_candidates"] = vocab["n"]
         nlp.meta["logos_build_phases"] = _phases
         _NLP = nlp
@@ -319,6 +324,11 @@ def canonical_predicate(word: str, pos: str = "n", lx=None) -> str:
     except Exception:                                            # noqa: BLE001
         return w
     if not synsets:
+        return w
+    if len(synsets) > 1:
+        # POLYSEMOUS -> REFUSE. First-sense selection is ~65% accurate on all-words WSD (65.2 F1 baseline),
+        # so a third of these would be renamed wrongly. Keeping the surface form is fail-safe: the word
+        # stays itself, which can only cost a missed merge, never a false one.
         return w
     try:
         lemmas = synsets[0].lemmas()
@@ -527,6 +537,24 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] the STOCK tokenizer does break it (so the fix is real)")
 
+    # --- the hyphen infix removal keeps domain terms atomic WITHOUT gluing unrelated text
+    toks = [t.text for t in dom("macro-F1 and SNOMED-CT are int8.")]
+    good = "macro-F1" in toks and "SNOMED-CT" in toks and "int8" in toks
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] domain terms stay atomic -> {toks}")
+
+    # --- and it must NOT break things that should split
+    url_toks = [t.text for t in dom("see http://x.com/a-b and the 10-20 range")]
+    good = "http://x.com/a-b" in url_toks and "10" in url_toks and "-" in url_toks
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] URLs stay whole and numeric ranges still split -> {url_toks}")
+
+    # --- a FILENAME and a snake_case identifier must survive
+    misc = [t.text for t in dom("config.yaml and en_core_web_sm")]
+    good = "config.yaml" in misc and "en_core_web_sm" in misc
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] filename and snake_case intact -> {misc}")
+
     # --- WordNet levers
     lx = bridge()
     if lx is None:
@@ -560,6 +588,13 @@ def run_self_test() -> bool:
           f"({canonical_predicate('bushel', 'n', lx)!r})")
 
     # --- the guard still holds: statistical vocabulary is never renamed into a neighbour
+    # --- MONOSEMY RULE: a polysemous word is NOT renamed (first-sense WSD is only ~65% accurate, and a
+    #     wrong merge makes two distinct predicates identical)
+    good = canonical_predicate("bank", "n", lx) == "bank"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a polysemous word is left alone "
+          f"(canonical(bank) = {canonical_predicate('bank', 'n', lx)!r})")
+
     good = canonical_predicate("significant", "a", lx) == "significant"
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] canonical(significant) is left alone")
