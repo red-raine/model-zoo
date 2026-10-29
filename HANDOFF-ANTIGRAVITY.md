@@ -860,3 +860,74 @@ capability with a narrow input population, not a general verifier.
 2. Proxy eval on **ProofWriter-OWA5** and **FOLIO** -- both categorical/Horn, so they measure the encoder where
    it is supposed to work, which AVeriTeC cannot.
 3. Pre-warmed Lean REPL pool.
+
+---
+
+### DEPENDENCY PARSING: FEWER PARSES, AND THAT IS THE FINDING (2026-10-29)
+
+#### What was built
+`tools/logos/logic/dep_encoder.py` -- English -> first-order shape via spaCy dependency parse instead of
+regex, 21 self-tests. The parse labels solve exactly the three real bugs:
+`
+"There is a scam..."             There has dep=expl      (expletive is a first-class label)
+"No news coverage was given..."  coverage is nsubjpass   (passive labelled)
+                                 news keeps lemma=news    (no singulariser to corrupt it)
+"All students ... who had to .." subject carries relcl    (class is restricted)
+`
+
+#### The measured result, not the expected one
+`
+                    parsed      refused
+regex               3  1.0%     297
+dependency          1  0.3%     299
+`
+**Dependency parses FEWER, not more.** And the comparison is informative: regex turned *"Ivermectin is a
+treatment for coronavirus"* into `treatment_for_coronavirus(x)`, flattening a RELATIONAL noun phrase into a
+unary predicate and dropping the second argument. Dependency refuses it. So the regex's three parses include
+one that is wrong; the dependency encoder's one parse is faithful.
+**It did not buy coverage. It bought honesty: 299 refusals with a named construction instead of 297 refusals
+plus three sloppy parses.**
+
+#### Coverage went up and the encoder got worse -- twice
+Adding PP-state complements took coverage 3 -> 5, and three of five were garbage:
+`"iPhone won't come with earphones" -> iphone(x) -> NOT with_earphone(x)`. Two bugs: my copula test accepted
+ANY auxiliary (a modal or perfect "have" leaves a LEXICAL verb at ROOT, and treating that as copular discarded
+the verb); and I had deleted a `prep` guard so relational nouns flattened. **A rise in coverage with a rise
+in wrong parses is a NET LOSS.**
+
+#### Polarity is not a dependency label -- the finding I would have missed
+Measured by the research agent over 16 negation constructions: `dep=="neg"` only **8/16**; lemma-keyed scan
+**16/16**. Most negation is not tagged `neg` -- "No cats" is `det`, "None of the cats" is `nsubj`, "Few
+cats" is `amod`, "hardly" is `advmod`. Now gated:
+- **"NOT ALL cats are mammals"** puts `neg` on the NOUN, so a "neg child of ROOT" test finds nothing and the
+  encoder emitted the universal it was told to negate -- **the opposite claim**.
+- **Double negation** ("No cats are not mammals") entails cats ARE mammals; one polarity bit cannot say that.
+- **Reduced passive** ("The policy criticized yesterday") has no `auxpass` and reads as active, reversing
+  agent and patient.
+
+#### Batching 25x, and multiprocessing is a Windows trap
+`
+one document at a time    51.3 s  (171 ms/claim)
+nlp.pipe(batch_size=256)   2.02 s  (6.73 ms/claim)     <- 25x
+`
+`n_process=8` is measured **57x SLOWER** on Windows (spawn re-imports spaCy per batch). Batch in ONE process.
+
+#### Why none of the literature validates adding a parser
+FoVer uses **no syntactic parser at all** (an LLM writes Python against Z3). KGGen's one dependency-parse
+system (CoreNLP OpenIE) scored **29.84% vs an LLM's 66.07%**, and its documented pathology is exactly our bug:
+pronoun/expletive subjects becoming the most-connected nodes. Dependency parsing fixes **negation scope** and
+**relative clauses** and does **nothing for quantifier scope** -- "Every boy loves a girl" and its inverted
+twin have identical trees.
+
+#### Why 1% is not a defect
+FoVer: 97% executability and 100% accuracy-on-executable on **synthetic** ProofWriter, then 70.4% on FOLIO and
+**59.2% on StrategyQA -- below a plain single-shot LM (79.2%)**. AVeriTeC prose is not the categorical/Horn
+family. 1% deterministic coverage is the expected behaviour; SOTA escapes it only by paying an LLM per claim.
+
+#### Next
+1. **Proxy eval on ProofWriter-OWA5 and FOLIO** -- AVeriTeC cannot measure this encoder; ProofWriter is the
+   family it covers and FOLIO is human-written. FoVer's 98.5% -> 73% gap is the calibration.
+2. **dep-vs-regex disagreement as a crosscheck signal** (same principle as crosscheck.py pairing parsers):
+   two independent encoders disagreeing on a sentence is evidence of an encoding problem, and costs nothing.
+3. **Quantifier scope cannot be fixed by parsing.** Enumerate readings, let Z3 adjudicate, abstain on
+   disagreement -- sub-millisecond, and the only mechanism in the mining that attacks scope without a model.
