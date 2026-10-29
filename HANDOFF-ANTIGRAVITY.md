@@ -1386,3 +1386,76 @@ than no gate: it teaches you to ignore gate failures.**
 1. The 5% verification rate is the ceiling: either find an independent mechanism for UsedFor/AtLocation/CapableOf
    (61% of edges, currently uncheckable) or stop investing in ConceptNet.
 2. FrameNet frame-arity into `dep_encoder` as an ESCALATE (noun coverage 3.61% of WordNet noun lemmas).
+
+---
+
+### FRAMES AS SITUATIONS + THE AUDIT THAT MEASURED ITS OWN INSTRUMENT (2026-10-29)
+
+New: `nlp/frames.py` (11 tests). Rewritten routing: `nlp/synset_injection.py` (17 tests). Suite 49/49.
+
+#### 1. What I had wrong
+I reduced a FrameNet frame to a boolean ("does this noun have unfilled core FEs?") and called it a relational
+guard. A frame is **a type of event/relation/entity plus its participants**, with typed relations to other
+frames, **inheritance** and **event order** -- an arity test keeps none of that.
+Then I used WordNet to audit ConceptNet and called 61.4% of its edges "unverifiable". **ConceptNet documents 34
+relations and names exactly 4 with WordNet correspondences (IsA, PartOf, Synonym, Antonym) => the ceiling was
+11.8% before any query; I measured 5.1%. The instrument measured itself.** Paulheim's KG-refinement survey
+documents the same failure: resource-vs-resource evaluation has errors in the target AND **in the linkage**
+(20% of DBpedia-Freebase interlinks wrong; ~half of owl:sameAs connect related-but-not-same).
+
+#### 2. The fix: WITNESS vs TYPE_SCHEMA
+`WITNESS` = a resource whose graph can confirm/contradict the CLAIM (evidence). `TYPE_SCHEMA` = qualia role
+the relation MAPS INTO for cross-source comparability (**no evidence**). Conflating them produced the bogus
+verdict. Qualia is schema only: the "tennis problem" paper has 10 roles, **TWO worked examples, no corpus, no
+metric, no data**.
+```
+WordNet-witness ceiling (documented)   11.8%  (4 of 34)
+measured WordNet-verified              5.1%  (14/272)  <- BELOW ceiling, as expected
+frames-witnessable                     4.0%  (11)
+no witness in this suite              38.2%  (104)
+```
+
+#### 3. nlp/frames.py -- participants, inheritance, event order
+`core_roles | ancestors | inherited_roles | precedes (returns the PATH) | subframes | audit_subevent | describe`
+**My first numbers were 2x wrong**: NLTK surfaces every relation twice (4,140 objects = **2,070 triples**).
+Deduped: Inheritance 781 | Using 556 | ReFraming_Mapping 217 | Subframe 131 | Perspective_on 127 |
+**Precedes 89** | See_also 86 | Causative_of 60 | Inchoative_of 19 | Metaphor 4.
+1,059 frames (87%) have >=2 core FEs -> **arity is the NORM, not a discriminator**. `Cure`: 6 own core FEs +
+18 inherited = 24 roles.
+Two corrections: **`Using` is NOT inheritance** (Boas/Ruppenhofer/Baker 2024 call it a looser "provides
+necessary background" link -- 556 edges would have been imported as is-a); and **event order covers 100/1,221
+frames (8.19%)**, so elsewhere it is UNKNOWN(temporal_order), never "not ordered". Real chains recovered:
+`Activity_prepare->ready->start->ongoing->finish->done_state` and the Process lifecycle. Noun lemma coverage
+3.65% of WordNet noun lemmas vs verb 26.43% (7.2x).
+
+#### 4. Links checked, not assumed
+- **intro-ontologies.pdf** (Zi Lin PKU 2017) read in full -> the "tennis problem": WordNet "contains no
+  relations that indicate the words' shared membership in a topic of discourse". Its "triplet" line describes
+  **ConceptNet's extension**, not WordNet's inventory: WordNet 3.0 has **21 pointer symbols / 285,348 pointers**
+  (69.2% hyponymy, 81.1% with meronymy) and DOES carry verb entailment (408) and cause (220) -- correcting my
+  own over-claim.
+- **E-HowNet REJECTED, and my hypothesis about it was wrong.** Traditional-Chinese lexicon with English glosses
+  on primitives, ~88,000 senses, **licence-gated**, no freely downloadable data. Its operator language is
+  **not** `cause/exist/part_of/located/TimeAfter` -- documented roles are manner, theme, aspect, quantity,
+  reason, material. I will not invent the rest.
+- **s11704-016-5228-9** = Yan et al. 2018 **survey**, no code/data/numbers. Useful part is 4.1: Horn clauses as
+  consistency constraints + **hard vs soft rules** -> maps onto KEEP/REPAIR/ESCALATE; SOFIE's weighted MAX-SAT
+  -> Z3 Optimize. Next build step.
+- **IEEE 8986607 UNRELATED**: Su et al. 2020 metonymy recognition. "Semantic priority interruption theory" has
+  ONE occurrence in the literature and no definition. Not citable.
+- **Minsky 1974 read in full**: keep two-level frames, typed terminals + **n-ary constraints**, sub-frames,
+  frame systems, defaults via **weak binding**. **Drop default-FILLING** -- no study isolates it with a
+  measured gain, and a filled default is a fabricated fact violating UNKNOWN-never-VERIFIED. Also the "frame
+  problem" does **not** appear in Minsky 1974 (zero occurrences; McCarthy & Hayes 1969).
+- **VerbNet x GL is the one with a measurement**: ProPara F1 **33%** (VerbNet only) / **38%** (+PropBank).
+
+#### 5. Qualia mapping corrected
+`UsedFor->Telic`, `CapableOf->Telic(direct)`, `CreatedBy->Agentive` correct. **`AtLocation->LOC`, not
+Constitutive** -- Constitutive is parts/material/weight; location is Yuan & Li's added 定位 role, absent from
+Pustejovsky's original four.
+
+#### Next
+1. **Weighted MAX-SAT over typed constraints with hard/soft rules (Z3 Optimize)** -- the principled form of the
+   KEEP/REPAIR/ESCALATE boundary: hard violation -> REPAIR/DROP, soft violation -> ESCALATE with its weight.
+2. Gate event order on the 100 ordered frames; UNKNOWN(temporal_order) elsewhere.
+3. Attach TYPE_SCHEMA to every edge for comparability, and keep it out of the verdict path.

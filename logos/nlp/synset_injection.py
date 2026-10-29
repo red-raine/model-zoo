@@ -75,6 +75,79 @@ VERIFIABLE = {
 UNVERIFIABLE = ("UsedFor", "AtLocation", "CapableOf", "HasPrerequisite", "DistinctFrom",
                 "RelatedTo", "Causes", "HasSubEvent", "MotivatedByGoal", "Desires", "ReceivesAction")
 
+# ---------------------------------------------------------------------------------------------
+# WHICH RESOURCE IS A WITNESS FOR WHICH RELATION, AND WHY THE EARLIER NUMBER WAS AN ARTEFACT
+#
+# ConceptNet documents 34 relations and names exactly FOUR that correspond to a WordNet relation:
+#     IsA (hyponym) | PartOf (part meronym) | Synonym | Antonym
+# That is **4/34 = 11.8%**. So the ceiling of a WordNet-based audit of ConceptNet was fixed at 11.8% before a
+# single query ran, and a measured "asserted" rate of 5.1% (14 of 272) is the *expected* signature of that
+# repertoire mismatch, not a finding about ConceptNet's quality.
+#
+# This is the same failure mode Paulheim's knowledge-graph-refinement survey documents for KG-vs-KG evaluation:
+# using another resource as a gold standard has "two sources of errors: errors in the target knowledge graph,
+# and errors in the LINKAGE between the two", and it reports that 20% of DBpedia-Freebase interlinks are wrong
+# and "roughly half of the owl:sameAs links between knowledge graphs connect two things which are related, but
+# not exactly the same". My audit assumed a relation-TYPE equivalence that exists for 4 relation types.
+#
+# So there are TWO separate fields, and conflating them was the error:
+#   WITNESS      -- a resource whose graph can confirm or contradict the CLAIM (evidence)
+#   TYPE_SCHEMA  -- qualia role that the relation MAPPED INTO, for comparability across sources (no evidence)
+#
+# Qualia is a schema, not a witness: the "tennis problem" paper (Yuan & Li, CCL 2014) offers 10 roles and TWO
+# worked examples, with no corpus, no metric and no released data. And Pustejovsky's Constitutive is
+# parts/material/weight, NOT location -- AtLocation maps to Yuan's added 定位/LOC role, not to Constitutive.
+CONCEPTNET_DOCUMENTED_RELATIONS = 34
+WORDNET_WITNESS = ("Synonym", "Antonym", "IsA", "PartOf")
+WITNESS_CEILING = len(WORDNET_WITNESS) / CONCEPTNET_DOCUMENTED_RELATIONS      # 0.1176
+
+WITNESS = {
+    # exactly the four relations ConceptNet itself names as WordNet correspondences
+    "Synonym": "wordnet",
+    "Antonym": "wordnet",
+    "IsA": "wordnet",
+    "PartOf": "wordnet",
+    # FrameNet's Subframe + Precedes DO give event order -- for the ~100 frames that carry it. A witness when
+    # both endpoints resolve to frames, otherwise ABSTAIN.
+    "SubeventOf": "frames",
+    "HasSubEvent": "frames",
+    "HasPrerequisite": "frames",
+    "Causes": "frames",
+    # nothing in this suite can witness these yet
+    "UsedFor": "none",
+    "CapableOf": "none",
+    "AtLocation": "none",
+    "DerivedFrom": "none",
+    "FormOf": "none",
+    "HasProperty": "none",
+    "DistinctFrom": "none",
+    "RelatedTo": "none",
+    "Desires": "none",
+    "ReceivesAction": "none",
+    "MotivatedByGoal": "none",
+}
+
+# Qualia as a TYPE SCHEMA: it makes edges from different sources comparable. It asserts nothing.
+# UsedFor -> Telic (purpose), CapableOf -> Telic/direct, AtLocation -> LOC (Yuan's extension, NOT Constitutive),
+# CreatedBy -> Agentive, event relations -> Generative Lexicon event structure.
+TYPE_SCHEMA = {
+    "UsedFor": "Telic",
+    "CapableOf": "Telic(direct)",
+    "AtLocation": "LOC",
+    "HasProperty": "Formal",
+    "PartOf": "Constitutive",
+    "DerivedFrom": "Agentive",
+    "FormOf": "Agentive",
+    "SubeventOf": "GL:event_structure",
+    "HasSubEvent": "GL:event_structure",
+    "HasPrerequisite": "GL:event_structure",
+    "Causes": "GL:event_structure",
+}
+
+# Backwards-compatible alias: code and callers that used AUDITOR now see the witness map.
+AUDITOR = WITNESS
+AUDITORS_WIRED = ("wordnet", "frames")
+
 _CACHE = {}
 
 
@@ -141,10 +214,16 @@ def verify(wn_synset, rel: str, tail: str) -> dict:
     """
     kind = VERIFIABLE.get(rel)
     if kind is None:
-        return {"status": "UNVERIFIABLE", "rel": rel, "why": "WordNet has no structural analogue"}
+        # NOT "unverifiable". WordNet's repertoire is a triplet; this relation belongs to another dimension and
+        # the AUDITOR map says which one. Saying "unverifiable" here blamed ConceptNet for WordNet's scope.
+        aud = AUDITOR.get(rel, "none")
+        return {"status": "OUTSIDE_WORDNET", "rel": rel, "auditor": aud,
+                "why": f"WordNet's relation repertoire does not include {rel}; the auditor for it is "
+                       f"{aud!r}" + ("" if aud in AUDITORS_WIRED else " (not wired in this suite yet)")}
     tails = _synsets_of(tail)
     if not tails:
-        return {"status": "UNVERIFIABLE", "rel": rel, "why": f"{tail!r} has no WordNet synsets"}
+        return {"status": "TAIL_NOT_IN_WORDNET", "rel": rel, "auditor": AUDITOR.get(rel, "wordnet"),
+                "why": f"{tail!r} has no WordNet synsets, so there is nothing to align the edge to"}
 
     try:
         if kind == "synonym":
@@ -259,6 +338,114 @@ def candidates(synset_name: str, max_lemmas: int = 4) -> list:
     return out
 
 
+def crosscheck(term: str, rel: str, tail: str) -> dict:
+    """Audit a ConceptNet edge with the resource that MODELS that relation, not with whichever one I have.
+
+    WordNet answers lexical questions (is `feline` a hypernym of `cat`?). Frames answer situational ones (is
+    `Activity_finish` a sub-event of `Activity`? does `Cure` precede `Recovery`?). Before this router existed,
+    every non-lexical relation was reported as UNVERIFIABLE, which converted a ROUTING gap into an apparent
+    property of ConceptNet.
+
+    Returns CONFIRMED / DENIED / ABSTAIN with the auditor named, so a refusal can cite the instrument that was
+    actually consulted and a gap can cite the one that does not exist.
+    """
+    aud = AUDITOR.get(rel, "none")
+    if aud == "wordnet":
+        s = _synsets_of(term)
+        if not s:
+            return {"status": "ABSTAIN", "auditor": "wordnet", "rel": rel,
+                    "why": f"{term!r} has no WordNet synsets"}
+        # pick the canonical synset so the alignment is to ONE sense, not to the whole lemma
+        from nltk.corpus import wordnet as wn
+        try:
+            s0 = wn.synsets(_norm(term).replace("_", " "))[0]
+        except Exception:                                    # noqa: BLE001
+            return {"status": "ABSTAIN", "auditor": "wordnet", "rel": rel, "why": "no canonical synset"}
+        v = verify(s0, rel, tail)
+        if v["status"] == "VERIFIED":
+            return {"status": "CONFIRMED", "auditor": "wordnet", "rel": rel, "detail": v}
+        if v["status"] == "CONTRADICTED":
+            return {"status": "DENIED", "auditor": "wordnet", "rel": rel, "detail": v}
+        return {"status": "ABSTAIN", "auditor": "wordnet", "rel": rel, "detail": v}
+
+    if aud == "frames":
+        try:
+            from logos.nlp import frames as F
+        except Exception as e:                               # noqa: BLE001
+            return {"status": "ABSTAIN", "auditor": "frames", "rel": rel,
+                    "why": f"frame layer unavailable: {type(e).__name__}"}
+        ta, tb = _norm(term).replace("_", " "), _norm(tail).replace("_", " ")
+        # a ConceptNet edge connects WORDS, so resolve lemmas to frames -- but accept a frame name directly
+        # too, because a caller that has already resolved a lexical unit should not have to re-resolve it.
+        # NOTE: frame names are CASE-SENSITIVE ('Activity_finish'), so the raw argument is tried as well as
+        # the normalised one -- lowercasing first made every frame-name lookup miss.
+        def _fr(w, raw):
+            # EXACT FRAME NAME FIRST. 'activity' is also a lexical unit in unrelated frames, so trying the
+            # lemma lookup first resolved a frame-name argument to the wrong 2 frames and the pair was then
+            # compared across frames that share no complex -- a guaranteed abstain.
+            for cand in (raw, w, w.title()):
+                if cand and F.frame(cand) is not None:
+                    return [cand]
+            return F.frames_for(w)
+        if rel in ("SubeventOf", "HasSubEvent"):
+            if rel == "SubeventOf":
+                a, ra, b, rb = ta, term, tb, tail
+            else:
+                a, ra, b, rb = tb, tail, ta, term
+            fa2, fb2 = _fr(a, ra), _fr(b, rb)
+            if not fa2 or not fb2:
+                return {"status": "ABSTAIN", "auditor": "frames", "rel": rel,
+                        "why": f"no frame for {a if not fa2 else b}; noun coverage is 3.61% of WordNet noun "
+                               f"lemmas, so absence here is expected"}
+            for x in fa2:
+                for y in fb2:
+                    r = F.audit_subevent(x, y)
+                    if r["status"] == "CONFIRMED":
+                        return {"status": "CONFIRMED", "auditor": "frames", "rel": rel, "detail": r}
+            return {"status": "ABSTAIN", "auditor": "frames", "rel": rel,
+                    "why": f"{len(fa2)}x{len(fb2)} frame pair(s) checked, no Subframe/Precedes path; only 131 "
+                           f"Subframe and 89 Precedes edges exist over 1,221 frames, so silence is not denial"}
+        # HasPrerequisite / Causes / CapableOf / AtLocation: event-order flavoured. Try ordering first.
+        fa, fb = _fr(ta, term), _fr(tb, tail)
+        if fa and fb:
+            for x in fa:
+                for y in fb:
+                    p = F.precedes(x, y)
+                    if p["status"] == "CONFIRMED":
+                        return {"status": "CONFIRMED", "auditor": "frames", "rel": rel, "detail": p}
+        return {"status": "ABSTAIN", "auditor": "frames", "rel": rel,
+                "why": f"frames present ({len(fa)}/{len(fb)}) but no ordering path; {rel} on this pair is "
+                       f"outside what FrameNet annotates"}
+
+    return {"status": "ABSTAIN", "auditor": aud, "rel": rel,
+            "why": f"no auditor for {rel!r} in this suite -- a work-queue entry, NOT a verdict about the claim"}
+
+
+def coverage_funnel(terms=None) -> dict:
+    """What fraction of ConceptNet edges each auditor can actually reach.
+
+    This is the measurement that replaces the misleading headline "61.4% unverifiable". A relation outside
+    WordNet's repertoire is expected; the question is how many of those a FRAME can reach.
+    """
+    cn = _cn()
+    if cn is None:
+        return {"status": "NO_CONCEPTNET"}
+    if terms is None:
+        terms = ["cat.n.01", "dog.n.01", "doctor.n.01", "bank.n.01", "increase.v.01",
+                 "significant.a.01", "water.n.01", "car.n.01", "run.v.01", "happy.a.01"]
+    by_auditor = collections.Counter()
+    by_status = collections.Counter()
+    routed = collections.Counter()
+    for name in terms:
+        for c in candidates(name):
+            aud = AUDITOR.get(c["rel"], "none")
+            by_auditor[aud] += 1
+            by_status[c["verdict"]] += 1
+            routed[f"{c['rel']}->{aud}"] += 1
+    return {"n_edges": sum(by_auditor.values()), "by_auditor": dict(by_auditor),
+            "by_wordnet_verdict": dict(by_status), "by_relation_route": dict(routed)}
+
+
 def injected_terms(synset_name: str, allow_unverified: bool = False) -> list:
     """The terms that may be added to this synset's signature.
 
@@ -369,12 +556,26 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] WordNet 3.0 present")
 
-    # --- a relation with no WordNet analogue must be UNVERIFIABLE, NEVER 'disagreed' or 'wrong'
+    # --- a relation outside WordNet's repertoire must be ROUTED and TYPED, not called "unverifiable".
+    #     The old verdict blamed ConceptNet for WordNet being a taxonomic resource.
     v = verify(wn.synset("cat.n.01"), "UsedFor", "pet")
-    good = v["status"] == "UNVERIFIABLE"
+    good = v["status"] == "OUTSIDE_WORDNET" and v.get("auditor") == "none"
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] UsedFor has no WordNet analogue -> UNVERIFIABLE "
-          f"({v['status']})")
+    print(f"  [{'PASS' if good else 'FAIL'}] UsedFor is OUTSIDE_WORDNET with witness={v.get('auditor')!r} "
+          f"and type-schema={TYPE_SCHEMA.get('UsedFor')!r}, not called unverifiable")
+
+    # --- THE CEILING. ConceptNet documents 34 relations and names exactly 4 with WordNet correspondences, so a
+    #     WordNet audit could never exceed 11.8%. This is the arithmetic that reframes the whole measurement.
+    good = abs(WITNESS_CEILING - 4 / 34) < 1e-9 and len(WORDNET_WITNESS) == 4
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the WordNet-witness ceiling is {100*WITNESS_CEILING:.1f}% "
+          f"(4 of {CONCEPTNET_DOCUMENTED_RELATIONS} documented relations)")
+
+    # --- qualia must be a SCHEMA only: it must never appear as a witness, because it has no measured data
+    good = "qualia" not in set(WITNESS.values())
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] qualia is a type schema, never a witness "
+          f"(witnesses in use: {sorted(set(WITNESS.values()))})")
 
     # --- a WordNet-checkable relation that WordNet DOES assert must verify
     v = verify(wn.synset("cat.n.01"), "IsA", "feline")
@@ -406,14 +607,30 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] Antonym cat -> true_cat CONTRADICTED "
           f"(WordNet puts them in the SAME synset) ({v['status']})")
 
-    # --- the four verdicts are distinct; collapsing CONTRADICTED into NOT_ASSERTED would overstate ConceptNet
+    # --- the four WordNet verdicts are distinct; collapsing CONTRADICTED into NOT_ASSERTED would overstate
+    #     ConceptNet, and collapsing OUTSIDE_WORDNET into either would understate WordNet's scope limit
     seen = set()
     for syn, rel, tail in (("cat.n.01", "UsedFor", "pet"), ("cat.n.01", "IsA", "feline"),
                            ("cat.n.01", "IsA", "automobile"), ("cat.n.01", "Antonym", "true_cat")):
         seen.add(verify(wn.synset(syn), rel, tail)["status"])
-    good = seen == {"UNVERIFIABLE", "VERIFIED", "NOT_ASSERTED", "CONTRADICTED"}
+    good = seen == {"OUTSIDE_WORDNET", "VERIFIED", "NOT_ASSERTED", "CONTRADICTED"}
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] all four verdicts are reachable and distinct ({sorted(seen)})")
+    print(f"  [{'PASS' if good else 'FAIL'}] all four WordNet verdicts are reachable and distinct "
+          f"({sorted(seen)})")
+
+    # --- and the ROUTER actually reaches the frame auditor for a situational relation
+    r = crosscheck("Activity_finish", "SubeventOf", "Activity")
+    good = r["status"] == "CONFIRMED" and r["auditor"] == "frames"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] crosscheck routes SubeventOf to the FRAME auditor and confirms it "
+          f"({r['status']}/{r['auditor']})")
+
+    # --- a relation with no auditor anywhere must say so as a work item, never as a denial
+    r2 = crosscheck("cat", "UsedFor", "pet")
+    good = r2["status"] == "ABSTAIN" and r2["auditor"] in ("qualia", "none")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] UsedFor has no auditor yet and ABSTAINS naming that gap "
+          f"({r2['auditor']})")
 
     # --- injection must be a SUBSET of the union, never a superset
     u = set(injected_terms("cat.n.01", allow_unverified=True))
