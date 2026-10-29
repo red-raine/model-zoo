@@ -1271,3 +1271,65 @@ four-way union**; Predicate Matrix (WN+VN+FN+PropBank) has measured 82-88 F1 map
    honest), then the bigger step it enables: accepting relational frames like `chase(dog, cat)`.
 2. The canary is 60 rows -- grow it by holding out a **fresh slice before looking at it**.
 3. MinHash dedup (0.8 + second pass 0.5).
+
+---
+
+### MINHASH DEDUP + THE THRESHOLD-HONESTY FIX (2026-10-29)
+
+#### 1. `tools/logos/clean/dedup.py` -- 14 self-tests
+**The bug I shipped first:** `MinHashLSH(threshold=0.8, num_perm=128)` lets datasketch pick `(b=9, r=13)`.
+Computed S-curve on this machine: **P(0.70)=0.084, P(0.80)=0.399, P(0.90)=0.929**. A true duplicate sitting AT
+the reported threshold was found **~40% of the time**, and no test could see it -- a detector that returns fewer
+clusters still looks like a working detector.
+**Fix:** candidate-generation-then-VERIFICATION, banding PINNED (112 perms, 14x8, per FineWeb App. E.1:
+P(0.75)=0.772, P(0.80)=0.924, P(0.85)=0.988), verdicts by **TRUE Jaccard**. Complete all-pairs below 2,500 rows.
+datasketch's optimiser minimises a **symmetric** loss, which is wrong for dedup where a false negative silently
+loses a real duplicate.
+**Measured, 489 real rows:**
+```
+EXACT      5 clusters,  11 redundant rows
+NEAR       4 clusters,   8 rows at Jaccard >= 0.8   <- deletable
+TEMPLATE  14 clusters,  31 rows at Jaccard >= 0.5   <- REPORT ONLY
+wall 0.96 s (1.93 ms/row)   mode: exact all-pairs
+```
+Both precision AND recall improved versus the LSH version (which gave 5/10 at 34.25 s): the old pairs were
+unverified, so false positives chained through union-find into whole clusters. **41x faster too** -- LSH is a
+tool for corpus sizes I do not have.
+
+#### 2. The numeric-aware guard -- the most important line in a claims corpus
+```
+"the eiffel tower is 330 metres tall ..."  vs  "the eiffel tower is 300 metres tall ..."
+```
+Those score far above 0.8 and are **NOT duplicates** -- different facts in the same shape. A near pair is
+deletable only if its **numeric content agrees**; otherwise it is reclassified NUMERICALLY-DISTINCT (reported,
+never deleted). Real protected template cluster: four DISTINCT claims about Muslim candidates / UPCS. Deleting
+three would have destroyed three facts.
+
+#### 3. Adaptive shingles: 13-grams are a DOCUMENT parameter
+Measured: one-word change in a 29-word claim at k=9 -> **Jaccard 0.615** (missed); one number changed at k=6 ->
+**0.370** (missed even at 0.5). Ordered n-grams punish an edit in proportion to n. Short claims use token-set
+Jaccard (k=1); document-length text uses 13-grams.
+
+#### 4. Research findings that change EXISTING design
+- **`lexicon_ensemble.py` is built on a pattern the evidence says does not work.** Ruggeri/Di Caro, weighted F
+  on MEN/SimLex: ConceptNet 0.591/0.552; WordNet 0.413/0.484; **plain union 0.592/0.538 (NO GAIN, and worse than
+  WordNet alone on SimLex precision 0.772->0.479)**; **disambiguated INJECTION 0.653/0.642 (+0.061/+0.104)**.
+  Their words: "the simple union ... did not carry to any increase in performance." `corroborated()` is a
+  union. Published shape = align each assertion to a SPECIFIC synset first. Even gated is 88.19% on n=505, so
+  corroboration should require two independent **mechanisms**, not two sources.
+- **spaCy `to_bytes()/from_bytes()` SILENTLY DROPS custom-named components** (a `pins` AttributeRuler
+  vanished; lemmas reverted). `to_disk()` + `spacy.load(dir)` preserves ruler AND injected `lemma_exc`.
+  `comorbidities -> "comorbiditie"` under the rule lemmatizer.
+- **FrameNet noun coverage 3.61% of WordNet noun lemmas vs 26.44% of verb lemmas (7.3x bias)** -> the relational
+  guard is ABSENT ~96% of the time on nouns. `treatment.n` has 3 LUs/3 frames (Cure has 6 core FEs).
+  "FE-occupancy -> predicate arity" has **NO published precedent** -> must ESCALATE, never rewrite.
+- **WSD: my 4-sentence test has 95% Wilson CI [0.30, 0.95]** -- cannot separate 50% from 95%. Use Raganato et al.
+  2017 (already WN 3.0, same inventory as `synsets(w,pos)[0]`, so MFS *is* my baseline): SemEval-2013 (1,644)
+  MFS **63.8**, SemEval-2015 (1,022) **67.1**, ALL **65.5**. n~350 for +/-5%.
+- **"Second pass at a lower Jaccard threshold" is NOT documented** and is mathematically redundant on the same
+  shingle sets. Documented practice is loose candidates + exact verification.
+
+#### Next
+1. Rebuild the lexicon union as **INJECTION** -- largest measured opportunity in the suite (+0.061/+0.104).
+2. Wire FrameNet frame-arity into `dep_encoder` as an **ESCALATE**, citing frame + core FEs.
+3. Build the WSD eval set before claiming enriched signatures help anything.
