@@ -1333,3 +1333,56 @@ Jaccard (k=1); document-length text uses 13-grams.
 1. Rebuild the lexicon union as **INJECTION** -- largest measured opportunity in the suite (+0.061/+0.104).
 2. Wire FrameNet frame-arity into `dep_encoder` as an **ESCALATE**, citing frame + core FEs.
 3. Build the WSD eval set before claiming enriched signatures help anything.
+
+---
+
+### WSD ON REAL GOLD + SYNSET INJECTION (2026-10-29)
+
+New: `nlp/wsd_eval.py` (7 tests), `nlp/synset_injection.py` (12 tests). Fixed: `nlp/lexicon_ensemble.py`,
+`ast_repair.py`.
+
+#### 1. Real WSD test replaces the 4-sentence one
+Raganato et al. 2017 amended corpus: **4,917 instances, WordNet 3.0** (same inventory as local nltk, so
+first-sense IS the published baseline). All on the same instances:
+```
+MFS (first sense)         59.87%   CI [58.5, 61.2]
+plain Lesk                45.11%
+UNION enrichment          44.60%   <- what lexicon_ensemble did: WORSE than no enrichment
+VERIFIED injection        45.19%
+UNION -> injection     McNemar p = 0.0141 (80 gained, 51 lost)  SIGNIFICANT
+plain Lesk -> injection McNemar p = 0.2188 (5 gained, 1 lost)   NOT significant
+```
+Published DIRECTION reproduces (injection > union) at far smaller magnitude, because ~95% of ConceptNet edges
+have no WordNet corroboration and are dropped. **Enrichment does not beat plain Lesk significantly and loses to
+first-sense by 14.7 points** -> not adopted as a method; `enriched_signature` now does verified injection
+instead of the union, which was actively harmful (same pattern the literature reports: union 0.592 MEN vs
+ConceptNet-alone 0.591, and worse than WordNet alone on SimLex with precision 0.772 -> 0.479).
+
+#### 2. My own "33.8% of ConceptNet is contradicted" was MY BUG, twice
+  a. **WordNet antonymy is one-directional and I compared STRINGS.** `significant.antonyms()` -> ['insignificant']
+     but `important.antonyms()` -> **[]**, so `unimportant` was called disagreed even though it shares synset
+     `insignificant.a.04` with the real antonym. Fixed by resolving antonymy through SYNSETS.
+  b. **"Not the identical synset" is not a contradiction.**
+Corrected, across 272 edges on 10 synsets: **VERIFIED 5.1% | CONTRADICTED 0.0% | NOT_ASSERTED 33.5% |
+UNVERIFIABLE 61.4%**. The contradiction rate is **zero**, not 33.8%. By relation: Synonym 105 -> 6 verified,
+IsA 31 -> 5, Antonym 18 -> 3, HasProperty 18 -> 0, PartOf 3 -> 0; UsedFor/AtLocation/CapableOf/HasA/
+HasPrerequisite/DistinctFrom have **no WordNet analogue at all**.
+
+#### 3. Two positive controls
+  a. The benchmark's `ALL-no-wn1st` file REMOVES every instance whose first sense is correct; my MFS scores
+     **0.0% on its 2,013 instances** -- exactly what a correct first-sense implementation must do.
+  b. **0 monosemous instances in 4,917** -> the 5.63-point gap from published 65.5 is because all-words figures
+     include trivially-correct monosemous words. 65.5 = 60.9 + x*(100-60.9) -> x ~= 11.8%, plausible. Absolute
+     numbers are not comparable to published all-words; the paired comparisons are what the conclusion rests on.
+
+#### 4. A flaky gate, found by not assuming my changes were innocent
+Suite failed on `ast_repair.py` (untouched): `repair_with_oracle(timeout=8.0)` runs doctests in a subprocess,
+and under suite load 8 s is not always enough -> non-PASSED -> search finds nothing -> reported **UNFIXABLE**, so
+a CORRECT source was reported unrepairable for a wall-clock reason. `TIMEOUT` is now its own status, the
+self-test budget is 60 s, and a regression test forces a timeout and asserts TIMEOUT. **A flaky gate is worse
+than no gate: it teaches you to ignore gate failures.**
+
+#### Next
+1. The 5% verification rate is the ceiling: either find an independent mechanism for UsedFor/AtLocation/CapableOf
+   (61% of edges, currently uncheckable) or stop investing in ConceptNet.
+2. FrameNet frame-arity into `dep_encoder` as an ESCALATE (noun coverage 3.61% of WordNet noun lemmas).

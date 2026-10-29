@@ -52,6 +52,10 @@ from logos.code_exec import check_doctests  # noqa: E402
 from logos.context_pack import gather  # noqa: E402
 
 PASSED, FIXED, UNFIXABLE, NO_ORACLE = "PASSED", "FIXED", "UNFIXABLE", "NO_ORACLE"
+TIMEOUT = "TIMEOUT"          # distinct from FAILED and from UNFIXABLE: a slow machine is not a broken source
+
+# Self-test assertions about SEMANTICS must not be decided by wall-clock noise on a loaded machine.
+SELFTEST_TIMEOUT = 60.0
 
 OPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.FloorDiv: "//",
        ast.Mod: "%", ast.Pow: "**"}
@@ -149,13 +153,30 @@ def repair_with_oracle(source: str, allow_exec: bool = False, timeout: float = 8
     base = check_doctests(source, allow_exec=True, timeout=timeout)
     if base.status == PASSED:
         return {"status": PASSED, "reason": "source already satisfies its doctests"}
+    if base.status == "TIMEOUT":
+        # A SLOW MACHINE IS NOT A BROKEN SOURCE. This branch exists because the absence of it made this
+        # module's own self-test fail INTERMITTENTLY: under full-suite load the 8 s oracle did not finish, the
+        # base check came back non-PASSED, the search found nothing, and the result was reported as UNFIXABLE
+        # -- so "a correct source is PASSED, not needlessly rewritten" failed for a reason that had nothing to
+        # do with the source. A flaky gate is worse than no gate, because it teaches you to ignore failures.
+        return {"status": TIMEOUT,
+                "reason": f"the doctest oracle did not finish within {timeout}s; this says nothing about the "
+                          f"source itself"}
 
     tried = 0
+    timed_out = 0
     for desc, cand in operator_candidates(source):
         tried += 1
         r = check_doctests(cand, allow_exec=True, timeout=timeout)
         if r.status == PASSED:
             return {"status": FIXED, "reason": desc, "candidate": cand, "tried": tried}
+        if r.status == "TIMEOUT":
+            timed_out += 1
+    if timed_out:
+        return {"status": TIMEOUT,
+                "reason": f"{timed_out} of {tried} candidate oracle runs timed out; the search was not "
+                          f"completed, so UNFIXABLE would be a false report",
+                "tried": tried}
     return {"status": UNFIXABLE, "reason": f"searched {tried} candidates, none satisfied the spec",
             "tried": tried}
 
@@ -201,13 +222,13 @@ def experiment(limit: int = 120, seed: int = 0) -> int:
     caught = fixed = 0
     clean = 0
     for orig, mut, _p in rows:
-        r_orig = check_doctests(orig, allow_exec=True, timeout=8.0)
+        r_orig = check_doctests(orig, allow_exec=True, timeout=SELFTEST_TIMEOUT)
         oracle_ok = r_orig.status == "PASSED"
         orig_passes += oracle_ok
         if not oracle_ok:
             continue
         clean += 1
-        r = repair_with_oracle(mut, allow_exec=True, timeout=8.0)
+        r = repair_with_oracle(mut, allow_exec=True, timeout=SELFTEST_TIMEOUT)
         if r["status"] in (FIXED, UNFIXABLE):
             caught += 1
         if r["status"] == FIXED:
@@ -275,27 +296,27 @@ def run_self_test() -> bool:
           f"-- invisible to both static gates")
 
     # --- context sees it: the doctest fails
-    r = check_doctests(mut, allow_exec=True)
+    r = check_doctests(mut, allow_exec=True, timeout=SELFTEST_TIMEOUT)
     good = r.status == "FAILED"
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] the doctest catches what the gates cannot")
 
     # --- and the repair search restores it, using the doctest as oracle
-    rep = repair_with_oracle(mut, allow_exec=True)
+    rep = repair_with_oracle(mut, allow_exec=True, timeout=SELFTEST_TIMEOUT)
     good = rep["status"] in (FIXED, UNFIXABLE) and rep["tried"] > 0
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] the repair search runs ({rep['status']} after "
           f"{rep.get('tried', 0)} candidates)")
 
     # --- an ALREADY CORRECT source is reported PASSED, not repaired
-    rep = repair_with_oracle(base, allow_exec=True)
+    rep = repair_with_oracle(base, allow_exec=True, timeout=SELFTEST_TIMEOUT)
     good = rep["status"] == PASSED
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a correct source is PASSED, not needlessly rewritten")
 
     # --- NO ORACLE when there are no doctests: refusing is correct, and is not the same as success
     no_doc = "def f(x):\n    return x + 1\n"
-    rep = repair_with_oracle(no_doc, allow_exec=True)
+    rep = repair_with_oracle(no_doc, allow_exec=True, timeout=SELFTEST_TIMEOUT)
     good = rep["status"] == NO_ORACLE
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] no doctests -> NO_ORACLE, not a silent pass")
@@ -305,6 +326,15 @@ def run_self_test() -> bool:
     good = rep["status"] == NO_ORACLE and "not permitted" in rep["reason"]
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] refuses to execute without allow_exec=True")
+
+    # --- A TIMEOUT MUST NOT BE REPORTED AS A BROKEN SOURCE. This is the regression test for the flaky
+    #     failure: with a timeout of 0 the oracle cannot finish, and the honest answer is TIMEOUT, not
+    #     UNFIXABLE. Before this branch existed the two were conflated.
+    rep_t = repair_with_oracle(base, allow_exec=True, timeout=0.001)
+    good = rep_t["status"] == TIMEOUT
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a timed-out oracle reports TIMEOUT, not UNFIXABLE "
+          f"({rep_t['status']})")
 
     # --- candidates are bounded, so the search cannot run away on a large file
     big = "def f(a):\n    return " + " + ".join(["a"] * 30) + "\n"

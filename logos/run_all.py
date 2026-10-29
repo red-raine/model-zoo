@@ -82,6 +82,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("verify/regression.py", False),
     ("verify/canary.py", True),
     ("nlp/verbnet_frames.py", True),
+    ("nlp/synset_injection.py", False),
+    ("nlp/wsd_eval.py", True),
     ("nlp/lexicon_ensemble.py", True),
     ("clean/dedup.py", False),
     ("egress.py", True),                   # live dual-path probe

@@ -192,11 +192,21 @@ def verify_related(a: str, b: str, pos=None) -> dict:
 
 
 # ------------------------------------------------------------------ the L16-1132 enrichment
-def enriched_signature(synset_name: str, use_conceptnet: bool = True) -> dict:
+def enriched_signature(synset_name: str, use_conceptnet: bool = True, verified_only: bool = True) -> dict:
     """A synset's signature: WordNet gloss + examples, EXTENDED with ConceptNet edges of its lemmas.
 
-    This is the mechanism from Di Caro & Boella (LREC 2016). It exists because plain WSD "fully relies on
-    these short texts", and short texts are exactly what made Lesk pick a khat plant for "my cat".
+    MEASURED ON 4,917 GOLD INSTANCES (see wsd_eval.py), which corrected the assumption behind this function:
+        MFS (first sense)        59.87%
+        plain Lesk               45.11%
+        UNION enrichment         44.60%   <- what this function used to do: WORSE than no enrichment at all
+        VERIFIED injection       45.19%   <- what it does now
+    Union -> injection is a significant improvement (McNemar exact p = 0.0141, 80 gained vs 51 lost). That
+    reproduces the DIRECTION of the published result (Ruggeri/Di Caro: union 0.592 MEN vs injection 0.653) at a
+    far smaller magnitude, and it confirms the other half too: the union did not beat plain WordNet, it lost to
+    it. So `verified_only=True` is now the default and the raw union is opt-in for comparison only.
+
+    And the honest bottom line: NEITHER variant beats first-sense, which is 14.7 points ahead. Enrichment is
+    not this suite's method; that remains `synsets(w,pos)[0]` plus a monosemy refusal.
     """
     wn = _wn()
     if wn is None:
@@ -210,20 +220,23 @@ def enriched_signature(synset_name: str, use_conceptnet: bool = True) -> dict:
     parts.extend(lemmas)
     cn_edges = []
     if use_conceptnet:
-        cn = _cn()
-        if cn is not None:
-            for lem in lemmas[:4]:
-                r = cn.assertions(lem)
-                if r.get("status") != "FOUND":
+        try:
+            from logos.nlp import synset_injection as inj
+            for c in inj.candidates(synset_name):
+                if verified_only and c["verdict"] != "VERIFIED":
                     continue
-                for e in r["edges"][:12]:
-                    cn_edges.append({"lemma": lem, "rel": e["rel"], "tail": str(e["tail"]),
-                                     "expert": e["expert"]})
-                    parts.append(str(e["tail"]).replace("_", " "))
+                if verified_only is False and c["verdict"] == "CONTRADICTED":
+                    continue          # never inject something WordNet actively contradicts
+                cn_edges.append({"lemma": c["lemma"], "rel": c["rel"], "tail": c["tail"],
+                                 "verdict": c["verdict"], "wn_rel": c["wn_rel"]})
+                parts.append(str(c["tail"]).replace("_", " "))
+        except Exception:                                    # noqa: BLE001
+            pass
     text = " ".join(parts)
     tokens = {_stem(t) for t in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", text.lower())}
     return {"status": "OK", "synset": synset_name, "tokens": sorted(tokens),
             "n_tokens": len(tokens), "n_cn_edges": len(cn_edges),
+            "verified_only": verified_only,
             "cn_edges": cn_edges[:16],
             "wordnet_only_tokens": len({_stem(t) for t in re.findall(
                 r"[A-Za-z][A-Za-z\-]{2,}",
@@ -268,44 +281,23 @@ def measure() -> int:
         shown = ", ".join(f"{k}[{'+'.join(v)}]" for k, v in list(a["sources"].items())[:4])
         print(f"  {t:13s} {shown[:58]:58s} {len(a['both']):5d}")
 
-    print("\n=== 2. THE L16-1132 TEST: does ConceptNet enrichment fix the Lesk failure? ===")
-    CASES = [
-        ("my cat is sitting on the mat", "cat", "cat.n.01"),
-        ("the vet examined the sick cat", "cat", "cat.n.01"),
-        ("he is a cool cat from the jazz scene", "cat", "guy.n.01"),
-        ("the doctor prescribed antibiotics", "doctor", "doctor.n.01"),
-    ]
-    print(f"  {'context':38s} {'correct':16s} {'plain':16s} {'enriched':16s}")
-    plain_ok = enr_ok = 0
-    for ctx, w, correct in CASES:
-        try:
-            from nltk.wsd import lesk as nltk_lesk
-            p = nltk_lesk(ctx.split(), w, "n")
-            pname = p.name() if p is not None else "-"
-        except Exception:                                    # noqa: BLE001
-            pname = "err"
-        e = lesk(ctx, w, "n", use_conceptnet=True)
-        ename = e.get("best") or "-"
-        plain_ok += 1 if pname == correct else 0
-        enr_ok += 1 if ename == correct else 0
-        print(f"  {ctx[:38]:38s} {correct:16s} {pname[:16]:16s} {ename[:16]:16s}")
-    n = len(CASES)
-    print(f"\n  plain nltk lesk : {plain_ok}/{n} correct")
-    print(f"  enriched        : {enr_ok}/{n} correct")
+    print("\n=== 2. THE L16-1132 TEST: replaced by a real gold standard ===")
+    print("  The old version of this section compared plain Lesk against enriched Lesk on FOUR sentences.")
+    print("  A 3-of-4 result has a 95% Wilson interval of [0.30, 0.95] -- it cannot separate 50% from 95%,")
+    print("  so nothing it showed was evidence. It has been replaced by nlp/wsd_eval.py, which runs against")
+    print("  4,917 gold instances (Raganato et al. 2017, WordNet 3.0 -- the same inventory as here, so")
+    print("  first-sense IS the published baseline). MEASURED:")
     print()
-    if enr_ok > plain_ok:
-        print(f"  ==> enrichment moved {plain_ok} -> {enr_ok} of {n}. ON {n} SENTENCES THAT IS NOISE, NOT A")
-        print(f"      RESULT. The L16-1132 mechanism is not demonstrated here, and I am not going to call a")
-        print(f"      single flipped sentence evidence. What the numbers DO show is that both methods are far")
-        print(f"      below the first-sense baseline that was measured separately at 99.5% agreement with the")
-        print(f"      SemCor MFS -- so for THIS suite, first-sense plus a monosemy refusal is still the method,")
-        print(f"      and enrichment is a candidate worth testing properly, not an adopted improvement.")
-    elif enr_ok == plain_ok:
-        print(f"  ==> no measurable gain on {n} sentences. Honest reading: {n} sentences cannot show a WSD")
-        print(f"      improvement, and first-sense frequency already beats both (measured earlier at 99.5%")
-        print(f"      agreement with the SemCor MFS). Do not claim enrichment works from this.")
-    else:
-        print(f"  ==> enrichment did WORSE on this set. Report it; do not tune until it looks better.")
+    print("      MFS (first sense)        59.87%   <- this suite's method, and it wins")
+    print("      plain Lesk               45.11%")
+    print("      UNION enrichment         44.60%   <- what this module used to do: WORSE than plain Lesk")
+    print("      VERIFIED injection       45.19%   <- what it does now")
+    print()
+    print("  Union -> injection: McNemar exact p = 0.0141 (80 gained, 51 lost) -- SIGNIFICANT, and it")
+    print("  reproduces the DIRECTION of the published result (union 0.592 MEN vs injection 0.653) at a far")
+    print("  smaller magnitude, because 95% of ConceptNet edges have no WordNet corroboration and are dropped.")
+    print("  Injection -> plain Lesk: p = 0.22, NOT significant. So enrichment is not adopted as a method.")
+    print("  Run: python tools/logos/nlp/wsd_eval.py --measure")
 
     print("\n=== 3. corroboration: relations BOTH sources assert ===")
     for t in ("significant", "unable", "harmless", "increase"):
