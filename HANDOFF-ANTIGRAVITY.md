@@ -671,3 +671,77 @@ machine needs `lake new ... math` + `lake exe cache get` (~9 k files).
 The install proved fragile on `E:` in a way I could not diagnose beyond "file operations on that tree hang";
 `B:` worked immediately, so the plan pins the location.
 A Lean check is ~800x the cost of the arithmetic validator. It belongs on rows that arithmetic cannot touch.
+
+---
+
+### ENGLISH ARGUMENTS GO TO Z3; DERIVATION NO LONGER CERTIFIES BY ENCOURAGEMENT (2026-10-28)
+
+#### 15 sources mined by three agents. Three findings that changed the design
+1. **Nothing in the literature uses a model as an oracle.** Every source with a real result verifies with a
+   Lean kernel or a CAS/SMT solver. Our sympy/Z3-at-milliseconds + Lean-when-needed split is the consensus
+   architecture, not a compromise.
+2. **The bottleneck is translation, not checking.** Every system that used an LLM for the encoding reported
+   encoding error as its dominant failure: Proof of Thought measured **58.22% precision / 53.98% FPR**; FoVer
+   states *"LLMs still produce incorrect expressions for individual sentences."* Every system that skipped the
+   LLM had no encoding error, because a human wrote the encoding.
+3. **Type 2 has no automatic solution anywhere.** The only mechanisms are social: refuse to encode (Moxia emits
+   NO theorem for 502 fixtures rather than a plausible partial one), resolve an identifier instead of
+   generating an artefact (Lean Finder), and keep handlers narrow so blame is local. Lean4PHYS is the proof:
+   two kernel-verified theorems had "unintended trivial shortcuts", found post-publication by humans, and the
+   paper reports no formalisation error rate at all.
+   Also: the **50 s Lean startup is solved** by a pre-warmed REPL pool (kimina-lean-server, import Mathlib
+   paid once at warmup, LRU import reuse, 1.5-2x over prior tooling).
+
+#### 	ools/logos/logic/fol_bridge.py -- English -> first-order Z3, no model anywhere
+Declared, reviewable sentence patterns; UNPARSEABLE is a real answer.
+`
+12/12 constructed cases, mean 1.15 ms/case  vs 13,167 ms/claim for Lean+Mathlib  = 11,416x cheaper
+`
+Taken from the sources, each for a measured reason: two-sided verdict ENTAILED/CONTRADICTED/UNDETERMINED
+(FoVer Alg-1); premise-consistency gate (ex falso makes any "valid" vacuous); cheating check (a conclusion
+asserted among its premises is valid and worthless); negation ledger as a GATE; skolemised existentials +
+single sort + predicates only, which stays in the **decidable Effectively Propositional fragment** so unknown
+is an encoding bug rather than a logic limitation; e.fullmatch so a trailing word is a hard error not a
+silent deletion; counterexample models and unsat cores for auditability.
+
+#### Four bugs in my own encoder, and the worst made EVERYTHING valid
+1. **The conclusion was asserted alongside its own negation** -- ormalise included it in the assertions and
+   check_argument added Not(conclusion). Trivially unsat, so every argument came back VALID, including
+   "all men are mortal, therefore Socrates is a fish". Caught only because three cases that must be INVALID
+   were reported VALID.
+2. **"No reptiles are mammals" encoded as Implies(reptile, mammal)** -- the OPPOSITE of the English. A
+   Type-2 failure inside the module that warns about Type-2 failures.
+3. **"Socrates is not mortal"** matched a pattern that consumed the "not", so 
+egated was never set. Third
+   polarity inversion of the session.
+4. (2) and (3) are one class, so the negation ledger became a **gate**: a parity mismatch refuses with
+   NEGATION_LEDGER_MISMATCH rather than returning a verdict about a different statement.
+
+#### The derivation check no longer certifies by encouragement
+It returned VERIFIED for any row containing "therefore/thus" plus step words -- any fluent paragraph about
+reasoning was certified. Now: VALID -> **NOT_APPLICABLE** (form validity is not truth), CONTRADICTED or
+UNDETERMINED -> **REFUTED** (safe direction, counterexample cited), UNPARSEABLE -> **UNKNOWN**.
+`
+All men are mortal; Socrates is a man; therefore Socrates is mortal.      ESCALATE  NOT_APPLICABLE
+All men are mortal; Socrates is a man; therefore Socrates is a fish.      DROP      REFUTED
+No reptiles are mammals; All snakes are reptiles; therefore no snakes..   ESCALATE  NOT_APPLICABLE
+No reptiles are mammals; All snakes are reptiles; therefore all snakes..  DROP      REFUTED
+Step 1: measure. Step 2: compare. Therefore within tolerance.             ESCALATE  UNKNOWN   <- was VERIFIED
+`
+
+#### My test expectations were wrong four times; the engine was right each time
+"All men are mortal" + "No men are mortal" is CONSISTENT (vacuously). "Socrates is a man" does NOT contradict
+"Socrates is not mortal" -- UNDETERMINED is correct. Both are now tests pinning the right behaviour.
+
+#### Not done, and why
+No LLM autoformalisation loop (unmeasurable without human-judged formalisations; 20-40 min/proof).
+No trained PRM/PSV -- no GPU, no labels, **and the mining found no cheap labelling recipe; that gap was not
+covered by these sources and is not being papered over.** No Lean on the bulk path (1,291x).
+
+#### Next, by value per effort
+1. **LOST_CORRECT replay gate** -- archive verdicts, replay before any change, fail if a former KEEP degrades.
+   No labels, milliseconds, the only quality signal we own outright.
+2. **Encoder refusal rate** on a real corpus -- no labels needed, and it says where the grammar should grow.
+3. Pre-warmed Lean REPL pool: 13.2 s/claim -> a warm constant.
+4. Proxy eval on **ProofWriter-OWA5** and **FOLIO** (same categorical/Horn family). Expect ProofWriter
+   optimistic and FOLIO honest -- FoVer's own 98.5% -> 73% gap is the calibration.

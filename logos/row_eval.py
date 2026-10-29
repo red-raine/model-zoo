@@ -177,20 +177,73 @@ def _chk_math(row: str, _src: str) -> Finding:
 
 
 def _chk_derivation(row: str, _src: str) -> Finding:
-    """The Apple-CoT signal: a conclusion with no intermediate steps is a guess with a derivation's clothes."""
-    has_conclusion = bool(re.search(r"\b(therefore|thus|hence|so)\b", row, re.I))
-    steps = len(re.findall(r"\bstep\s*\d|\d\.\s|\b(first|then|next|finally)\b", row, re.I))
-    if not has_conclusion:
-        return Finding("derivation", "chain-shape", "medium", NA, citation="no conclusion marker",
-                       detail="")
-    if steps == 0:
-        return Finding("derivation", "chain-shape", "medium", UNKNOWN,
-                       citation=f"conclusion marker present, {steps} intermediate step(s)",
-                       detail="asserts a conclusion with no stated derivation; treat as unsupported "
-                              "rather than verified (late-spike signal)")
-    return Finding("derivation", "chain-shape", "medium", VERIFIED,
-                   citation=f"{steps} intermediate step marker(s) before the conclusion",
-                   detail=f"{steps} steps")
+    """Was there an argument, and does it HOLD? Replaces a regex that counted discourse markers.
+
+    THE OLD BEHAVIOUR WAS KEEP-BY-ENCOURAGEMENT. It returned VERIFIED when the row contained
+    "therefore/thus/hence" plus step words, which means any fluent paragraph about reasoning was certified
+    as a valid derivation. Fluent prose about reasoning is trivially producible, so that check was near-worthless
+    in the one direction that matters here.
+
+    It now asks Z3 (via logic/fol_bridge) whether the conclusion follows from the premises, on a declared,
+    reviewable English-to-first-order encoding. Three deliberate asymmetries, all conservative:
+
+      VALID          -> NA, not VERIFIED. Form validity is evidence about the ARGUMENT, never about the
+                        claim's truth, and a VERIFIED here would let a well-formed falsehood through. The
+                        encoding is also ours: three polarity inversions were found in it in one session, so
+                        a VALID verdict buys a "no red flag", not a certificate.
+      CONTRADICTED   -> REFUTED. The premises entail the negation. This is the safe direction: a wrong
+      /UNDETERMINED     encoding costs a good row (cheap), while the reverse costs a bad KEEP (catastrophic).
+                        The counterexample model is cited so the verdict is auditable.
+      UNPARSEABLE    -> UNKNOWN, never VERIFIED. An argument we could not encode cannot be certified by
+                        counting its words.
+
+    Cost is ~1.15 ms/case measured, against 13-52 s/claim for the Lean kernel, so this is the cheap tier.
+    """
+    if not re.search(r"\b(therefore|thus|hence|so)\b", row, re.I):
+        return Finding("derivation", "chain-shape", "medium", NA, citation="no conclusion marker", detail="")
+
+    try:
+        from logos.logic import fol_bridge
+    except Exception as e:                                    # noqa: BLE001
+        return Finding("derivation", "fol", "medium", UNKNOWN,
+                       citation=f"fol_bridge unavailable ({type(e).__name__})",
+                       detail="an argument was asserted and nothing could check it")
+
+    try:
+        r = fol_bridge.check_row(row)
+    except Exception as e:                                    # noqa: BLE001
+        return Finding("derivation", "fol", "medium", UNKNOWN,
+                       citation=f"fol_bridge raised {type(e).__name__}", detail=str(e)[:120])
+
+    status = r.get("status")
+    detail_kind = r.get("detail", "")
+
+    if status == fol_bridge.VALID:
+        if r.get("vacuous"):
+            return Finding("derivation", "fol", "medium", UNKNOWN,
+                           citation="Z3: conclusion asserted among the premises",
+                           detail="circular argument: valid and proves nothing")
+        needed = r.get("premises_needed")
+        return Finding("derivation", "fol", "medium", NA,
+                       citation=f"Z3 fol_bridge: {detail_kind or 'VALID'}"
+                                + (f", premises used {needed}" if needed else ""),
+                       detail="the argument is formally VALID, which is a statement about its form and not "
+                              "about whether the conclusion is true -- so it does not verify the row")
+
+    if status == fol_bridge.INVALID and detail_kind in ("CONTRADICTED", "UNDETERMINED"):
+        cx = r.get("counterexample")
+        cx_s = ""
+        if isinstance(cx, dict) and cx:
+            cx_s = "; ".join(f"{k}={v}" for k, v in list(cx.items())[:4])
+        return Finding("derivation", "fol", "medium", REFUTED,
+                       citation=f"Z3 fol_bridge: {detail_kind}",
+                       detail=(r.get("reason") or "")[:100] + (f" | counterexample: {cx_s}" if cx_s else ""))
+
+    # UNPARSEABLE / UNKNOWN / inconsistent premises / ledger mismatch / no premises
+    return Finding("derivation", "fol", "medium", UNKNOWN,
+                   citation=f"Z3 fol_bridge: {status}/{detail_kind or '-'}",
+                   detail=(r.get("reason") or "the argument could not be encoded, so nothing about it is "
+                                              "claimed")[:140])
 
 
 CHECKS: tuple[Check, ...] = (
@@ -337,21 +390,33 @@ def run_self_test() -> bool:
     print(f"  [{'PASS' if good else 'FAIL'}] a broken parent short-circuits the child "
           f"(skipped: {v.skipped})")
 
-    # --- THE APPLE-CoT SIGNAL: a conclusion with no derivation is UNKNOWN, not VERIFIED
-    v = execute("The bridge is tall, therefore it is old.")
-    der = next((f for f in v.findings if f.check == "derivation"), None)
-    good = der is not None and der.verdict == UNKNOWN and "no stated derivation" in der.detail
-    ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] a conclusion with no steps is UNKNOWN (late-spike signal), "
-          f"so the row ESCALATEs: {v.disposition}")
-
-    # --- but a conclusion WITH steps is credited
+    # --- a conclusion whose argument cannot be encoded is UNKNOWN, never VERIFIED.
+    #     The old check VERIFIED this row because it contained "Step 1 / Step 2 / Therefore" -- which is
+    #     KEEP-BY-ENCOURAGEMENT: any fluent paragraph about reasoning was certified. Counting discourse
+    #     markers is not evidence, so the row now escalates.
     v = execute("Step 1: measure the span. Step 2: compare to the design. Therefore it is within "
                 "tolerance.")
     der = next((f for f in v.findings if f.check == "derivation"), None)
-    good = der is not None and der.verdict == VERIFIED
+    good = der is not None and der.verdict == UNKNOWN and v.disposition == ESCALATE
     ok = ok and good
-    print(f"  [{'PASS' if good else 'FAIL'}] a conclusion with stated steps is VERIFIED")
+    print(f"  [{'PASS' if good else 'FAIL'}] step words alone no longer VERIFY anything ({der.verdict if der else '-'}, "
+          f"{v.disposition})")
+
+    # --- a semantically FALSE argument is REFUTED, which is the safe direction: a wrong encoding costs a
+    #     good row (cheap) rather than passing a bad one (catastrophic).
+    v = execute("All men are mortal; Socrates is a man; therefore Socrates is a fish.")
+    der = next((f for f in v.findings if f.check == "derivation"), None)
+    good = der is not None and der.verdict == REFUTED and v.disposition == DROP
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an argument that does not follow is REFUTED -> {v.disposition}")
+
+    # --- and a formally VALID argument must NOT verify the row. Validity is a statement about the argument,
+    #     not about whether its conclusion is true.
+    v = execute("All men are mortal; Socrates is a man; therefore Socrates is mortal.")
+    der = next((f for f in v.findings if f.check == "derivation"), None)
+    good = der is not None and der.verdict == NA
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a VALID argument returns NA, not VERIFIED ({der.verdict if der else '-'})")
 
     # --- every finding declares a category and a tier, so routing is auditable
     v = execute("pi = 3.14159")
