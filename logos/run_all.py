@@ -80,6 +80,9 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("logic/scope_triage.py", True),
     ("nlp/domain_nlp.py", True),
     ("verify/regression.py", False),
+    ("verify/canary.py", True),
+    ("nlp/verbnet_frames.py", True),
+    ("nlp/lexicon_ensemble.py", True),
     ("egress.py", True),                   # live dual-path probe
 )
 

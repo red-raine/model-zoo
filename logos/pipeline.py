@@ -335,7 +335,7 @@ def guess_kind(row: str) -> str:
 
 def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None,
                  gate_threshold: float = 0.5, repair_policy: str = "auto",
-                 prose_numeric_flags: bool = False) -> dict:
+                 prose_numeric_flags: bool = False, router=None) -> dict:
     """One row, all the way through. Returns the disposition plus the reason for it.
 
     Every branch that can change the disposition is recorded in `why`, so a verdict can be audited
@@ -425,6 +425,39 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
     # ---- SPLIT THE DROP PILE. row_eval returns DROP for both "a check refuted this" and "no check
     # applied". Only the first is a defect. The second is a row nothing here can decide, and calling it
     # junk is how a review pile vanishes.
+    # ---- THE ROUTER, consulted ONLY where the cheap tier could not decide. It picks a TIER, not an
+    # instrument, and it can only escalate or stop -- never promote. `router=None` disables it entirely, so
+    # existing behaviour (and the frozen canary metrics) are unchanged unless a caller opts in.
+    router_tier = None
+    if router is not None and not rv.refuted_by and disposition in (DROP, ESCALATE):
+        try:
+            from logos.nlp import pattern_router as _pr
+            cheap_verdict = "UNKNOWN"
+            for f in findings:
+                if getattr(f, "name", None) == "math" or getattr(f, "check", "") == "math":
+                    cheap_verdict = getattr(f, "verdict", "UNKNOWN")
+                    break
+            ctx = _pr.context_vector(row, cheap_verdict)
+            act = router.choose(ctx)
+            router_tier = _pr.TIERS[act]
+            why.append(f"router: cheap tier gave no decision, chose tier {router_tier} "
+                       f"(of {_pr.TIERS})")
+            if router_tier >= 3:
+                # tier 3 = the spaCy instruments. They can only ADD a refusal or a scope flag here; they
+                # never produce KEEP, so this cannot loosen the pipeline.
+                try:
+                    from logos.logic import dep_encoder
+                    de = dep_encoder.parse_dependency(row)
+                    if de.get("status") != "PARSED":
+                        why.append(f"router tier 3: dep_encoder declined ({de.get('reason', '')[:70]})")
+                    else:
+                        why.append(f"router tier 3: dep_encoder parsed "
+                                   f"{de.get('subject')}(x) -> {de.get('predicate')}(x)")
+                except Exception as e:                    # noqa: BLE001
+                    why.append(f"router tier 3: dep_encoder unavailable ({type(e).__name__})")
+        except Exception as e:                            # noqa: BLE001
+            why.append(f"router unavailable ({type(e).__name__})")
+
     # ---- structure is not a conclusion. a TEXT row that is merely well-formed has NOT been verified.
     if kind == "text" and disposition == KEEP and _only_structural_verification(findings):
         disposition = ESCALATE
@@ -506,6 +539,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
             "n_findings": len(findings), "gated": gated,
             "gate_sufficient": (gate or {}).get("sufficient"),
             "low_band": len((gate or {}).get("low_band") or []), "flags": flags,
+            "router_tier": router_tier,
             "skipped": rv.skipped, "why": why,
             "findings": [f.as_dict() for f in findings]}
 
@@ -924,6 +958,36 @@ def run_self_test() -> bool:
     good = set(res["counts"]) == set(DISPOSITIONS) and res["n"] == 2
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] batch counts always contain all four dispositions")
+
+    # --- THE ROUTER IS OPT-IN AND CANNOT LOOSEN ANYTHING
+    a = evaluate_row("The Eiffel Tower is 330 metres tall.", kind="text")
+    good = a.get("router_tier") is None
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] without a router the pipeline is unchanged (router_tier=None)")
+
+    try:
+        from logos.nlp import pattern_router as _pr
+        _r = _pr.CascadeRouter(seed=0)
+        out = evaluate_row("The Eiffel Tower is 330 metres tall.", kind="text", router=_r)
+        good = out.get("router_tier") in _pr.TIERS
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] with a router it records the chosen tier "
+              f"({out.get('router_tier')})")
+
+        # --- a row the cheap tier already DECIDED must never reach the router
+        out2 = evaluate_row("2 + 2 = 5", kind="text", router=_r)
+        good = out2["disposition"] == REPAIR and out2.get("router_tier") is None
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] a decided row never consults the router "
+              f"({out2['disposition']}, tier={out2.get('router_tier')})")
+
+        # --- and the router cannot promote: an ESCALATE row stays ESCALATE whatever tier it picks
+        out3 = evaluate_row("Apoptosis is programmed cell death.", kind="text", router=_r)
+        good = out3["disposition"] == ESCALATE
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] the router cannot promote: still {out3['disposition']}")
+    except Exception as e:                                # noqa: BLE001
+        print(f"  [SKIP] router unavailable ({type(e).__name__})")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok

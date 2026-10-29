@@ -1207,3 +1207,67 @@ vocabulary. Local is *better* here: no network in the verification path, so a 50
 - spaCy lemmatizer: `lemma_exc` keyed by POS, with `attribute_ruler` pinning POS first (measured: 11 of 16
   injected exceptions fired; the 6 misses were tokens the tagger labelled VERB).
 - **Open**: cascade router not wired into `pipeline.py`; held-out canary; MinHash dedup (0.8 + 0.5).
+
+---
+
+### CANARY UP, ROUTER WIRED, VERBNET ADDED (2026-10-29)
+
+#### 1. Held-out canary -- `tools/logos/verify/canary.py`
+Still no human-labelled held-out set. What IS possible: a **hold-out by INDEX**. Every measurement in this
+project used dev.jsonl rows 1..300; rows **440..500** have never been read by any experiment, so they are held
+out with respect to MY work (stated, not blurred). Frozen label-free metrics on 60 rows:
+`false_drop_rate 0.0000 | coverage 0.0000 | escalate_rate 1.0000 | scope_ambiguous 0.1333 |
+encoder_refusal 1.0000`. Plus a **hash lock** on the row set and a digest over the metrics: a changed
+population is REFUSED (ROW_SET_CHANGED) rather than silently re-measured. Canary PASSED.
+
+#### 2. Cascade router WIRED IN
+`pipeline.evaluate_row(..., router=None)`. The router sits INSIDE the cascade as the **tier selector**:
+consulted at exactly one point (where the cheap tier could not decide), it can only say stop or escalate to
+tier k -- it cannot override a refutation and cannot promote to KEEP. `router=None` is byte-identical to the
+old behaviour, which keeps the LOST_CORRECT gate honest.
+Measured: tier 2 recorded with a router; a refuted row never reaches it (2+2=5 -> REPAIR, tier=None); an
+ESCALATE row stays ESCALATE whatever tier is picked.
+**Two wiring bugs, both mine:** the guard tested `disposition == ESCALATE` but at that point an undecided
+prose row is still DROP (reclassification happens later), so the router was NEVER consulted; and
+`router_tier = None` was initialised AFTER the block that sets it, overwriting every decision.
+
+#### 3. VerbNet ADDED -- 265 KB, 329 classes, 4,577 verbs, commercial use permitted
+The research decided it with a number: **DAVID (Dunietz, Levin & Carbonell, ACL 2013) measured WordNet+VerbNet
+SELECTIONAL-PREFERENCE violation detection at F1 28.27%** on as-is resources. A 28-F1 instrument in a
+precision-first suite is a false-DROP generator, so only **FRAME LEGALITY** is used -- a finite lookup.
+NLTK's bundled `verbnet` corpus is **v2.1** (two major versions behind); this module reads Colorado 3.3 XML.
+`
+"The committee gave the award to the winner."  give       MATCHED  N V N to N
+"She gave the book."                          give       MATCHED  N V N
+"The cat sleeps."                             sleep      MATCHED  N V
+"Quantum frobnication transmutes the lattice." transmute MATCHED  N V N
+"Dogs chase cats."                            chase      UNKNOWN  (root is not 'chase')
+`
+Only ~46% of WordNet verbal senses have a VerbNet class, so "not in VerbNet" is **UNKNOWN, never illegal**.
+**Five bugs, each failing in a different direction:** (a) parsing `<SYNTAX>` by TEXT when VerbNet writes
+`<NP value="Agent"/>` -- every frame empty, every check UNKNOWN, and a module that always returns UNKNOWN
+passes every negative test; (b) braced literals `{to}` dropped; (c) `parse_shape` emitted "V" FIRST so the
+subject order was lost -- a shape is an ORDER; (d) VerbNet side lowercase `n V n` vs parse side `V N`, so
+an identical shape could never match; (e) the object of a root-attached preposition dropped, so the dative
+frame read `N V N to` and never matched `N V n to n`. Plus a guard: the parse ROOT must BE the verb asked
+about, which is why "Dogs chase cats" is now UNKNOWN instead of a false NO_MATCH.
+
+#### 4. HowNet NOT ADDED, with the numbers
+English side is a **translated Chinese** inventory (104,025 strings, often phrases); the only measured
+verification-adjacent gain is **+1.7 pp** (Liu et al. 2018, Chinese, neural, 94.4% human ceiling) and the
+authors say sememes alone are "not sufficient"; best alignment is BabelNet<->HowNet **F1 69.69** (EACL 2023),
+~30% noise BEFORE corroboration; **no commercial data licence found**; client unreleased since 2021-12-16.
+
+#### 5. Corrections to the links, because I checked
+`jcip...980` unfetchable (502); the **GWC 2008 proceedings have no live copy** (GWA has not archived
+pre-2014); **ieeexplore 8986607 is a metonymy-recognition paper**, unrelated; the "LREC 2010 FrameNet-WordNet
+alignment" is actually **GWC 2010**; and **L16-1132 does NOT union HowNet/VerbNet/FrameNet** -- it unions
+WordNet + ConceptNet, and its real contribution is an overlap-gated union with a collaborative-filtering veto,
+structurally the same as the `corroborated()` subset already built. **No published whole exists for the
+four-way union**; Predicate Matrix (WN+VN+FN+PropBank) has measured 82-88 F1 mappings and HowNet is absent.
+
+#### Next
+1. Wire VerbNet frame legality into `dep_encoder` as a **refusal** (can only add refusals, so gates stay
+   honest), then the bigger step it enables: accepting relational frames like `chase(dog, cat)`.
+2. The canary is 60 rows -- grow it by holding out a **fresh slice before looking at it**.
+3. MinHash dedup (0.8 + second pass 0.5).

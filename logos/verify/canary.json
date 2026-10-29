@@ -1,0 +1,442 @@
+{
+ "built_at": "2026-10-29T03:36:20",
+ "range": [
+  440,
+  500
+ ],
+ "corpus": "B:\\datasets\\forge\\verifier-av\\dev.jsonl",
+ "rows": [
+  {
+   "idx": 440,
+   "text": "In Belfast, the digital sector employs 26 per cent of the workforce.",
+   "sha": "a2b3aed370517cceccce624fd59259dc",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: In Belfast, the digital sector employs 26 per cent of the workforce.\n\nEVIDENCE:\nQ: Where did these statistics come from? A: A paywalled article published in The Times, \u201cTech firms blaze trail with huge jobs drive\u201d, cites a report by Tech Nation, \u201cJobs & Skills Report 2020\u201d, which analysed advertising for job vacancies in the UK, from June to August 2020, using data from Adzuna, an online search engine for job advertisements. The Times article states, \u201cIn nine British cities, tech companies account for a fifth of all em | Q: What percentage of the workforce in Belfast is actually employed in jobs in the tech sector? A: Using BRES (Table 1.1 \u201cDCA\u201d), the two relevant industrial sectors (SIC Sections J \u2018Information and communication\u2019 and M \u2018Professional, scientific, and technical\u2019) are estimated to have employed 32,927 people in Belfast, or 14% of the city\u2019s workforce. This includes jobs that are very unlikely to match the Tech Nation report\u2019s meaning of \u201cDigital Tech\u201d. (For example, section M includes lawyers, acc"
+  },
+  {
+   "idx": 441,
+   "text": "Hooligans from the Muslim community were behind the desecration of Goddess Kali Idol in a Bengal Temple in West Bengal's Murshidabad district by burning it.",
+   "sha": "c118ec65ea0212596585154d119af960",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Hooligans from the Muslim community were behind the desecration of Goddess Kali Idol in a Bengal Temple in West Bengal's Murshidabad district by burning it.\n\nEVIDENCE:\nQ: Was the Goddess Kali Idol in a Bengal Temple in West Bengal's Murshidabad district burnt by hooligans from the Muslim community? A: No | Q: How did the Goddess Kali Idol in a Bengal Temple in West Bengal's Murshidabad district catch fire? A: ...temple committee secretary Sukhdev Bajpai said, \"Nothing has been stolen from the temple as is being claimed by some people. It is most likely that the idol of Goddess Kali caught fire by accident. We have not filed any FIR since we do not suspect foul play.\""
+  },
+  {
+   "idx": 442,
+   "text": "Bill Gates was involved in crafting the TRACE Act.",
+   "sha": "a66e87d7482aec94183bc708c8b1d068",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Bill Gates was involved in crafting the TRACE Act.\n\nEVIDENCE:\nQ: What is the 2020 TRACE Act? A: Is a bill which aims To authorize the Secretary of Health and Human Services to award grants to eligible entities to conduct diagnostic testing for COVID\u201319, and related activities such as contact tracing, through mobile health units and, as necessary, at individuals\u2019 residences, and for other purposes. | Q: Who is Bill Gates that the claim mentions? A: Business mogul, chairman of Microsoft, author, philanthropist, William Henry Gates III, more commonly known as Bill Gates | Q: Does the Trace ACT Bill mention Bill Gates? A: No"
+  },
+  {
+   "idx": 443,
+   "text": "It's NOT a SECOND WAVE of COVID-19 coming soon. It's the NORMAL COLD / FLU SEASON",
+   "sha": "9db8fb449edaed33af001ad5916457eb",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: It's NOT a SECOND WAVE of COVID-19 coming soon. It's the NORMAL COLD / FLU SEASON\n\nEVIDENCE:\nQ: Are Covid-19 and influenza the same? A: No | Q: Are cases of flu and Covid-19 reported differently? A: Yes"
+  },
+  {
+   "idx": 444,
+   "text": "The World Health Organization (WHO) says there is no proof that face masks protect against Covid-19.",
+   "sha": "43ab7faa19c9fe2dbeba97e31662ef73",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The World Health Organization (WHO) says there is no proof that face masks protect against Covid-19.\n\nEVIDENCE:\nQ: What did the WHO say concerning the use of masks A: Masks are a key measure to suppress transmission and save lives. Masks should be used as part of a comprehensive \u2018Do it all!\u2019 approach including physical distancing, avoiding crowded, closed and close-contact settings, good ventilation, cleaning hands, covering sneezes and coughs, and more. Depending on the type, masks can be used for either protection of healthy persons or to prevent onward trans | Q: Can face masks prevent the spread of the COVID-19 virus A: More importantly, our data showed that masks worn by non-HCWs can also effectively prevent the spread of respiratory viruses and reduce the risk of virus infection by 56% in non-household settings, indicating the potential benefits of wearing masks for the general public. Moreover, significant protective effects were found in the study conducted in the general population indicating the potential b | Q: Are ordinary fabric face masks recommended in working against COVID-19 A: The use of \u2018fabric\u2019 face masks as an additional preventative measure against COVID-19 has been recommended for public use by the National Department of Health (NDoH). The spread of COVID-19 is mainly via respiratory droplets produced when an infected person coughs or sneezes, similar to how influenza and other respiratory pathogens spread. Therefore, wearing a fabric face mask is added as a preven"
+  },
+  {
+   "idx": 445,
+   "text": "Masks lower immune systems.",
+   "sha": "0c80279633e2ca412a5d6f0a83fdf51c",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Masks lower immune systems.\n\nEVIDENCE:\nQ: What can lower your immune system? A: When your immune system doesn't work the way it should, it's called an immune system disorder. You may: Be born with a weak immune system. This is called primary immune deficiency. Get a disease that weakens your immune system. This is called acquired immune deficiency. Have an immune system that is too active. This may happen with an allergic reaction. Have an immune system that turns against you | Q: Can wearing a mask lower your immune system? A: Face masks help to limit contact with infectious droplets which carry pathogens. However, the material used for face masks are still porous enough to allow gas molecules, such as carbon dioxide and oxygen, to pass through, and do not significantly impair gas exchange to the point of causing hypercapnia. No scientific evidence supports the claim that the use of face masks weakens the immune system."
+  },
+  {
+   "idx": 446,
+   "text": "US President Trump made vaccines voluntary, not mandatory, in the US.",
+   "sha": "56c4cd704813c940b6f1dbb6625bbb9f",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: US President Trump made vaccines voluntary, not mandatory, in the US.\n\nEVIDENCE:\nQ: Are vaccinations a directive of the Federal government in the United States A: Vaccinations and their subsequent exemptions are a directive of the state and local government | Q: Are vaccinations mandatory A: Some states make it compulsory whereas others have exemptions"
+  },
+  {
+   "idx": 447,
+   "text": "A virus can easily pass through a mask.",
+   "sha": "af580af0c4ccf5071adf23a3344c9a68",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: A virus can easily pass through a mask.\n\nEVIDENCE:\nQ: What percentage of Micro organisms are blocked by masks? A: Surgical masks have a filtering capacity for 90 percent of microorganisms, including (the virus). For FFP2 masks used in intensive care, this capacity increases to 98 percent, 99 percent. For fabric masks, it is lower, estimated to be between 50 percent and 70 percent. This is confirmed by guidelines set out by the Canadian government for the production of masks and respirators."
+  },
+  {
+   "idx": 448,
+   "text": "Kyle Rittenhouse failed to appear at his court hearing in Lake County, Illinois, on 28th August 2020 and was given an extra month to comply.",
+   "sha": "43b4c15dd7e8c68e4075835412a691ab",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Kyle Rittenhouse failed to appear at his court hearing in Lake County, Illinois, on 28th August 2020 and was given an extra month to comply.\n\nEVIDENCE:\nQ: Did Kyle Rittenhouse appear for his first hearing on 28 August 2020? A: No | Q: Was Rittehouse's initial hearing delayed by the judge? A: Yes"
+  },
+  {
+   "idx": 449,
+   "text": "Some US mayors are fining people for going to church during the COVID-19 pandemic.",
+   "sha": "e4fb2b2198eeb4e0b51e0c859f2f0fd6",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Some US mayors are fining people for going to church during the COVID-19 pandemic.\n\nEVIDENCE:\nQ: Had there been any examples of municipal government's fining churches or church-goers by the time of the claim during the COVID-19 pandemic? A: Following through with Mayor Lori Lightfoot\u2019s promise to take action against churches that violate social distancing rules, the Chicago Police Department issued $500 fines to three separate houses of worship that held services over the weekend, city officials said. | Q: Had there been any examples of municipal government's fining churches or church-goers by the time of the claim during the COVID-19 pandemic? A: GREENVILLE, Miss. \u2014 Churchgoers who attended a drive-in service at a church in Greenville, Mississippi, were fined $500 for reportedly violating a curfew order from the mayor. | Q: Had there been any examples of municipal government's fining churches or church-goers by the time of the claim during the COVID-19 pandemic? A: Mayor Errick D. Simmons\u2019 made a Statement Regarding Greenville City Council April 7, 2020 - In an effort to move forward in an united front, the City will not require anyone to pay the fines issued on April 7th for the violations of the city council order. Although I am accused of seeking national attention by a political leader, my record is clear on my intent and love for this City."
+  },
+  {
+   "idx": 450,
+   "text": "US President Trump declared places of worship as essential services during COVID-19 pandemic.",
+   "sha": "5017d2191f8ac6efd2a7eecbe8d2e414",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: US President Trump declared places of worship as essential services during COVID-19 pandemic.\n\nEVIDENCE:\nQ: What was an essential services during COVID-19 pandemic in the US? A: For purposes of the Order and the conduct it limits, \"essential services\" means and encompasses the list detailed by the U.S. Department of Homeland Security in its Guidance on the Essential Critical Infrastructure Workforce, | Q: Were places of worship included on the list of essential services? A: Yes"
+  },
+  {
+   "idx": 451,
+   "text": "PEDOPHILIA is now LEGAL in CALIFORNIA",
+   "sha": "8a7fadbdc7b6f19cf4ba87b844bfb443",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: PEDOPHILIA is now LEGAL in CALIFORNIA\n\nEVIDENCE:\nQ: What is the claim referencing when it says this? A: Senate Bill No. 145 | Q: What does senate Bill No 145 say about sex with minors? A: Senate Bill 145 ends California\u2019s anti-LGTBQ discriminatory treatment of specific sex acts regarding sex offender registry law. Under longstanding California law, if an adult has voluntary penile-vaginal intercourse with a minor aged 14, 15, 16, or 17 and is up to 10 years older than the minor, the offense is not automatically registerable. A judge has discretion whether or not to place the defend | Q: Does SB 145 legalize sex with minors/pedophilia ? A: SB 145 DOES NOT legalize or weaken the penalties for any conduct. These offenses remain crimes punishable by law, and a judge can still CHOOSE to put the older party on the registry if the case warrants it. Just like a judge can do with an offense involving penile-vaginal intercourse. This bill only applies to young people aged 14, 15, 16 or 17 and anyone within a 10 year age range. The vast, vast | Q: What is the age of consent in California? A: The age of consent remains unchanged. Under current law, it is ILLEGAL for anyone over 18 to have any type of sex with a 14, 15, 16 or 17 year old. This REMAINS ILLEGAL under SB 145 and is punishable by law. The only change is that a judge can decide, when the sexual contact is oral, anal or digital, whether or not the older party should be on the sex offender registry \u2013 if the couple is close in"
+  },
+  {
+   "idx": 452,
+   "text": "Republican Maine Sen. Susan Collins said of President Donald Trump, \u201cYes, I said that I wouldn\u2019t endorse him but that doesn\u2019t mean I don\u2019t fully support him.\u201d",
+   "sha": "4c010397f3faf07f310ceeea1b5a2e4a",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Republican Maine Sen. Susan Collins said of President Donald Trump, \u201cYes, I said that I wouldn\u2019t endorse him but that doesn\u2019t mean I don\u2019t fully support him.\u201d\n\nEVIDENCE:\nQ: Did Republican Maine Sen. Susan Collins say of President Donald Trump, \u201cYes, I said that I wouldn\u2019t endorse him but that doesn\u2019t mean I don\u2019t fully support him.\u201d A: No | Q: Did Republican Maine Sen. Susan Collins say of President Donald Trump, \u201cYes, I said that I wouldn\u2019t endorse him but that doesn\u2019t mean I don\u2019t fully support him.\u201d? A: No | Q: Where did this claim originate from? A: A Facebook post | Q: What has Facebook labelled the claim post? A: False Information. Checked by independent fact-checkers. | Q: Why does Facebook classify some posts as 'false information'? A: Flagging of false news may indeed have an effect on reducing false news sharing intentions by diminishing the credibility of misleading information."
+  },
+  {
+   "idx": 453,
+   "text": "US President Trump instructed his administration to halt funding of the World Health Organization while a review was conducted to assess the World Health Organization\u2019s role regarding the spread of coronavirus.",
+   "sha": "9347ce9449b31175665088d9db184570",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: US President Trump instructed his administration to halt funding of the World Health Organization while a review was conducted to assess the World Health Organization\u2019s role regarding the spread of coronavirus.\n\nEVIDENCE:\nQ: Did President Trump announce plans to stop funding the World Health Organization? A: No answer could be found as the website quoted in the article is no longer available. | Q: Has the US paid the World Health Organisation money since Trumps statement in 2020? A: AFP reported that as of May 31, the U.S. owed WHO $203 million in outstanding assessed contribution fees, according to a WHO status report. As of Aug. 31, the U.S. owes WHO about $99 million, that report states, indicating the U.S. has paid WHO since Trump\u2019s claims were made. This suggests that the president did not stop funding WHO in 2020. | Q: Why did Trump defund WHO A: Because he felt they weren't being accountable"
+  },
+  {
+   "idx": 454,
+   "text": "Face masks cause hypoxia.",
+   "sha": "0133459a35840f32100cde6204e2fd02",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Face masks cause hypoxia.\n\nEVIDENCE:\nQ: Do masks cause oxygen restriction in healthy individuals? A: No | Q: Can masks cause oxygen restriction in individuals with previous lung and breathing problems? A: There is some evidence, however, that prolonged use of N-95 masks in patients with preexisting lung disease could cause some build-up of carbon dioxide levels in the body. People with preexisting lung problems should discuss mask wearing concerns with their health care providers. | Q: What is hypoxia? A: Hypoxia means \u201clow oxygen.\u201d In aquatic ecosystems, low oxygen usually means a concentration of less than 2-3 milligrams of oxygen per liter of water (mg/l). | Q: What is hypoxia? A: Hypoxia refers to cells or tissues not having enough oxygen to function effectively. | Q: Does face masks cause hypoxia? A: Absolutely not. We wear masks all day long in the hospital. The masks are designed to be breathed through and there is no evidence that low oxygen levels occur. There is some evidence, however, that prolonged use of N-95 masks in patients with preexisting lung disease could cause some build-up of carbon dioxide levels in the body. People with preexisting lung problems should discuss mask wearing c | Q: Does face masks cause hypoxia? A: There is no proof that wearing a mask can reduce oxygen levels, also known as hypoxia. The United States Centers for Disease Control and Prevention (U.S. CDC) recommend wearing cloth masks over a surgical mask in public, which are not too tight on our faces and allow for easy breathing. Even doctors and healthcare professionals wearing N95 masks (which fit very tightly around the face and are made"
+  },
+  {
+   "idx": 455,
+   "text": "US Cable news channel Fox News is unavailable in Canada due to media legislation.",
+   "sha": "79a89551133f9cecb063888b2084cb63",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: US Cable news channel Fox News is unavailable in Canada due to media legislation.\n\nEVIDENCE:\nQ: When was Fox news added to the channels approved by the Canadian Radio-television and Telecommunications Commission? A: In 2004 the CRTC approved Fox News - 'The Commission approves the addition of the non-Canadian services, Fox News and NFL Network, to its lists of eligible satellite services for distribution on a digital basis.'"
+  },
+  {
+   "idx": 456,
+   "text": "idol of goddess Kali was burnt in West bengals Murshidabad by the muslim community.",
+   "sha": "fae456b43cc6d6cc98f807433f027092",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: idol of goddess Kali was burnt in West bengals Murshidabad by the muslim community.\n\nEVIDENCE:\nQ: What was the cause of the fire that burnt down the idol of goddess Kali in West bengals Murshidabad? A: As stated by mandir committee it was a fire accident."
+  },
+  {
+   "idx": 457,
+   "text": "The Radio Act in Canada makes it a crime to lie to the public via airwaves.",
+   "sha": "cb92c855461752030bda23c254b854ba",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The Radio Act in Canada makes it a crime to lie to the public via airwaves.\n\nEVIDENCE:\nQ: Does Canada have a Radio Act? A: No | Q: Does the Canadian Radiocommunication Act deal with broadcasting content? A: No | Q: Does Canada have a law regarding broadcasting content? A: Yes | Q: Do the Canadian Broadcasting Distribution Regulations prohibit false or misleading news? A: Yes"
+  },
+  {
+   "idx": 458,
+   "text": "The South African Police Service kills three times more people per capita than the United States police force",
+   "sha": "59e3b331f91ed90b7f8f08112ca1b7d3",
+   "gold": "NOT_ENOUGH_EVIDENCE",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The South African Police Service kills three times more people per capita than the United States police force\n\nEVIDENCE:\nQ: How many people have been killed by police in the USA? A: These numbers have not been gathered or released to the public yet. Congress passed the Death in Custody Reporting Act of 2013, which went into effect in December 2014, but federal officials have not yet gathered the data and made it public. | Q: How many people have been killed by police in South Africa? A: in 2017-18 there were 436 deaths as a result of police action."
+  },
+  {
+   "idx": 459,
+   "text": "In 2018, South African police service officers were accused of 217 cases of torture and 3,661 cases of assault.",
+   "sha": "a2fc92e3c3e00eeac6da769bd8a5e0ad",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: In 2018, South African police service officers were accused of 217 cases of torture and 3,661 cases of assault.\n\nEVIDENCE:\nQ: How many cases of torture were brought against the South African police department A: 270 cases in the 2018/2019 year | Q: How many cases of assault were brought against the South African police A: 3, 835 cases"
+  },
+  {
+   "idx": 460,
+   "text": "Since 2002, South Africa\u2019s police force has grown by 50%.",
+   "sha": "77efd8bc507a578941268ffc50647116",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Since 2002, South Africa\u2019s police force has grown by 50%.\n\nEVIDENCE:\nQ: How many people were employed in the SA police force in 2002/03 A: 132,310 | Q: How many people were employed in SA police force in 2018/19 A: 192,277 | Q: What is the percentage growth in the SA police force between 2002 to 2019 A: 45.3%"
+  },
+  {
+   "idx": 461,
+   "text": "All India Institute of Medical Sciences Nursing Officer Recruitment Common Eligibility Test 2020 was postponed.",
+   "sha": "d23b05d2dd0fef4f6b2c82808da53b69",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: All India Institute of Medical Sciences Nursing Officer Recruitment Common Eligibility Test 2020 was postponed.\n\nEVIDENCE:\nQ: Was the All India Institute of Medical Sciences Nursing Officer Recruitment Common Eligibility Test 2020 postponed? A: Yes"
+  },
+  {
+   "idx": 462,
+   "text": "US cable news channel Fox News is not available in Canada due to media legislation in the country.",
+   "sha": "84c5f7bd4b8dd163f83be2d38f90bea0",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: US cable news channel Fox News is not available in Canada due to media legislation in the country.\n\nEVIDENCE:\nQ: Is Fox News approved for transmission in Canada? A: Yes | Q: Does Fox news confirm this on their website? A: Yes"
+  },
+  {
+   "idx": 463,
+   "text": "558 people were killed by the police in 2018, while 201 people died in police custody",
+   "sha": "b0f006e76d69988f78b3907c0fa40da8",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: 558 people were killed by the police in 2018, while 201 people died in police custody\n\nEVIDENCE:\nQ: Has the police violence increased in south Africa? A: Yes as per the numbers shown, police violence has increased in South Africa. | Q: How many people were killed by South African police in 2018? A: 558 | Q: How many people were killed in custody by South African police in 2018? A: 201"
+  },
+  {
+   "idx": 464,
+   "text": "The number of North American bison has been reduced to only twenty-seven individuals due to colonizers.",
+   "sha": "bf5dc6c3295585c5ef51e5cd3a6651d3",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The number of North American bison has been reduced to only twenty-seven individuals due to colonizers.\n\nEVIDENCE:\nQ: Were North American bison reduced to only twenty-seven individuals due to colonizers? A: No | Q: Was the North American bison nearly brought close to extinction? A: Yes | Q: How many individual bison were recorded in 2020 A: Through ongoing conservation work, bison are recovering from a low of fewer than 1,000 individuals. Today, 19 herds in 12 states roam the American Plains | Q: How many individual bison were recorded in 2020 A: Today, bison numbers have rebounded somewhat, and about 500,000 bison live on preserves and ranches where they are raised for their meat."
+  },
+  {
+   "idx": 465,
+   "text": "Jacob Blake raped a 14 year old teenage girl.",
+   "sha": "c6501d29272e5369f8747181a948b8d1",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Jacob Blake raped a 14 year old teenage girl.\n\nEVIDENCE:\nQ: Does Jacob Blake appear on the states sex offender registry? A: No | Q: Is there any sexual assault on a minor child mentioned on the warrant in the Wisconsin department of justices news release about the shooting? A: No | Q: What was the charge Jacob Blake was facing when he was shot by police? A: Blake is accused in the criminal complaint, which was obtained by The Post, of breaking into the home of a woman he knew and sexually assaulting her. | Q: How old was the women in question? A: It is not mentioned directly but from the context it is clear she was an adult, not a minor"
+  },
+  {
+   "idx": 466,
+   "text": "Amber Alert Issued For License Plate Q72B381",
+   "sha": "3cb61afe13075a2937890dcd32b7a453",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Amber Alert Issued For License Plate Q72B381\n\nEVIDENCE:\nQ: Is there an amber alert facebook page? A: AMBER alerts, the United States\u2019 child abduction alert system, is coming to Facebook. Today, the social network announced a partnership with the National Center for Missing and Exploited Children to help bring timely information about missing kids to Facebook members located in targeted search areas. | Q: Was an amber alert issued on the Facebook page on August 30 2020? A: No | Q: What is the amber alert facebook page? A: It is the United States\u2019 child abduction alert system that is present on the social network for alerting of Missing and Exploited Children to help bring timely information about missing kids to Facebook | Q: What is the date of this claim? A: August 30 2020 | Q: Was any amber alert issued on their Facebook page on August 30 2020? A: No"
+  },
+  {
+   "idx": 467,
+   "text": "Suresh Raina, the Chennai Super Kings (CSK) cricketer, has withdrawn from the upcoming 2020 edition of the IPL after testing positive for COVID-19.",
+   "sha": "e4d5d2aca2ab864c72b6314bdab7581f",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Suresh Raina, the Chennai Super Kings (CSK) cricketer, has withdrawn from the upcoming 2020 edition of the IPL after testing positive for COVID-19.\n\nEVIDENCE:\nQ: Has CSK cricketer Suresh Raina withdrawn from the upcoming 2020 edition of the IPL due to testing positive for COVID-19? A: No"
+  },
+  {
+   "idx": 468,
+   "text": "Even with a voter ID card, you won\u2019t be allowed to vote in Ghana on December 7 if your name is not found in the Register. So, people should take advantage of the exhibition exercise to verify their names.",
+   "sha": "c00239ccc5464231ed6738dd69b80aff",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Even with a voter ID card, you won\u2019t be allowed to vote in Ghana on December 7 if your name is not found in the Register. So, people should take advantage of the exhibition exercise to verify their names.\n\nEVIDENCE:\nQ: Can voters still vote in Ghana if their name is not found in the register? A: No"
+  },
+  {
+   "idx": 469,
+   "text": "A crowdfunding campaign on the Christian site GiveSendGo solicited donations to help Kyle Rittenhouse, a 17-year-old accused of killing two people at a protest in Kenosha, Wisconsin.",
+   "sha": "21780674cef6517e643deb202c1f5f70",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: A crowdfunding campaign on the Christian site GiveSendGo solicited donations to help Kyle Rittenhouse, a 17-year-old accused of killing two people at a protest in Kenosha, Wisconsin.\n\nEVIDENCE:\nQ: What is GiveSendGo A: It is a Christian crowdfunding website | Q: Was there a crowdfunding account for Kyle Rittenhouse A: Wisconsin has a Christian crowdfunding site set up for his legal defense with over $80,000 raised! | Q: On what platform was the crowdfunding account set up for Kyle Rittenhouse A: A self-described Christian fundraising site, GiveSendGo, said on Friday it has raised more than $100,000 for Rittenhouse\u2019s defense."
+  },
+  {
+   "idx": 470,
+   "text": "Islamic study is a subject in UPSC exam",
+   "sha": "51350403be7c0738b0983b10c09b9f38",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Islamic study is a subject in UPSC exam\n\nEVIDENCE:\nQ: What subjects are in UPSC exam? A: Current events of national and international importance. History of India and Indian National Movement. Indian and World Geography-Physical, Social, Economic Geography of India and the World. Indian Polity and Governance-Constitution, Political System, Panchayati Raj, Public Policy, Rights Issues, etc. Economic and Social Development-Sustainable Development, Poverty, Inclusion, Demographics, Socia | Q: Is Islamic studies a subject in UPSC exam? A: No answer could be found."
+  },
+  {
+   "idx": 471,
+   "text": "The Trump RNC Acceptance Speech Was The First Time The White House Was Used For 'Purely Political Campaign Event'",
+   "sha": "76056e1c98b84f2653e09c9b264e61e5",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The Trump RNC Acceptance Speech Was The First Time The White House Was Used For 'Purely Political Campaign Event'\n\nEVIDENCE:\nQ: Have other political campaign events taken place in the White House? A: There have been many. One example is eighty years before Trump's speech, in 1940, President Franklin D. Roosevelt delivered his acceptance speech. There is a photograph of him sitting at his desk in the White House."
+  },
+  {
+   "idx": 472,
+   "text": "Donald trump said \"We have already built 300 miles of border wall.\"",
+   "sha": "4f1cdd63540b10bfabe44804b5de6939",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald trump said \"We have already built 300 miles of border wall.\"\n\nEVIDENCE:\nQ: Since Donald Trump became president how much of a wall has been built? A: When Trump was campaigning to become president, the southwest border had 654 miles of primary barriers. Under Trump, that has increased by three miles, to 657. | Q: What has trumps administration done with the wall building since Trump took office? A: Trump's administration mainly replaced barriers installed by previous administrations with new ones that are expected to be more effective in stopping illegal immigration and drug smuggling. Mexico has not paid for any construction. Americans are paying the costs"
+  },
+  {
+   "idx": 473,
+   "text": "Donald Trump says Biden \"is even talking about taking the wall down.\"",
+   "sha": "e49a0a31a6d5832fd95ba63b851ca734",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump says Biden \"is even talking about taking the wall down.\"\n\nEVIDENCE:\nQ: Is the Donald Trump Quote saying that Biden \"is even talking about taking the wall down\" accurate? A: Yes | Q: What has Biden said about the US border wall? A: Democrats will rescind President Trump\u2019s fabricated \u201cNational Emergency,\u201d which siphons funding away from our men and women in uniform to construct an unnecessary, wasteful, and ineffective wall on the southern border. He did not say that any | Q: Has Biden said that his government will take the wall down? A: No"
+  },
+  {
+   "idx": 474,
+   "text": "George Floyd died of drug overdose, not US police brutality",
+   "sha": "49219e9b09d88011ece221f9640158d0",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: George Floyd died of drug overdose, not US police brutality\n\nEVIDENCE:\nQ: What was the US Hennepin County medical examiner's office ruling on the manner of Floyd\u2019s death? A: The press release report from the medical examiner's office states: Manner of death: Homicide | Q: What was the US Hennepin County medical examiner's office ruling on the cause of Floyd\u2019s death? A: The press release report from the medical examiner's office states: Cause of death: Cardiopulmonary arrest complicating law enforcement subdual, restraint, and neck compression."
+  },
+  {
+   "idx": 475,
+   "text": "Donald Trump said: Biden \"has pledged a $4 trillion tax hike on almost all American families.\"",
+   "sha": "7294a61a1ca890608b548bb41db26120",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said: Biden \"has pledged a $4 trillion tax hike on almost all American families.\"\n\nEVIDENCE:\nQ: What has Biden said about tax hikes for families? A: I will raise taxes for anybody making over $400,000,\u201d Biden told Muir, adding, \u201cno new taxes\u201d would be raised for anyone making under $400,000. | Q: So where would Biden hike taxes? A: Biden would also raise taxes on corporations by raising the corporate income tax rate and imposing a corporate minimum book tax."
+  },
+  {
+   "idx": 476,
+   "text": "Biden has promised to abolish the production of American oil, coal, shale, and natural gas.",
+   "sha": "e78dced6d09de9484283d94c7270584f",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Biden has promised to abolish the production of American oil, coal, shale, and natural gas.\n\nEVIDENCE:\nQ: What is Biden's climate plan? A: As president, Biden will lead the world to address the climate emergency and lead through the power of example, by ensuring the U.S. achieves a 100% clean energy economy and net-zero emissions no later than 2050. | Q: What is Biden's climate plan? A: The Biden Administration will take action against fossil fuel companies and other polluters who put profit over people and knowingly harm our environment and poison our communities\u2019 air, land, and water, or conceal information regarding potential environmental and health risks. | Q: What is Biden's climate plan? A: Create jobs in climate-smart agriculture, resilience, and conservation, including 250,000 jobs plugging abandoned oil and natural gas wells and reclaiming abandoned coal, hardrock, and uranium mines | Q: Does Biden's climate plan mention abolishing the production of American oil, coal, shale, and natural gas? A: No"
+  },
+  {
+   "idx": 477,
+   "text": "Joe Biden had not condemned the violence and looting during protests in Kenosha, Wisconsin by 27th August 2020",
+   "sha": "edbbab4276151720635d958e2ef90dd7",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Joe Biden had not condemned the violence and looting during protests in Kenosha, Wisconsin by 27th August 2020\n\nEVIDENCE:\nQ: What happened in Kenosha, Wisconsin in August 2020? A: 25th/26th August 2020 Two people were killed and a third was injured in a shooting Tuesday night during protests in Kenosha, the city's Police Department confirmed early Wednesday. It was the third night of protests over the police shooting of Jacob Blake. | Q: Did Joe Biden speak out about what was happening in Kenosha? A: Yes"
+  },
+  {
+   "idx": 478,
+   "text": "Duterte has signed order to open nuclear power plant.",
+   "sha": "049155527540d7ebf53de35f7992da70",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Duterte has signed order to open nuclear power plant.\n\nEVIDENCE:\nQ: What orders has President Duterte given in relation to nuclear power before September 2020? A: An order to \"conduct a study for the adoption of a National Position on a Nuclear Energy Program\u2026 Review the existing legal framework, study the viability of nuclear energy, and recommend the necessary steps in the utilization of nuclear energy, as well as existing facilities such as but not limited to the Bataan Nuclear Power Plant\u201d | Q: Prior to September 2020 what legislation did the Philippines House of Representatives pass about opening a power plant? A: A RESOLUTION DIRECTING THE APPROPRIATE COMMITTEE OF THE HOUSE OF REPRESENTATIVES, TO CONDUCT AN INQUIRY, IN AID OF LEGISLATION, ON THE POSSIBILITY OF USING THE BATAAN NUCLEAR POWER PLANT (BNPP) AS A SOURCE OF POWER IN ORDER TO DECREASE THE COST OF ELECTRICITY RATES | Q: Prior to September 2020 what legislation did the Philippines House of Representatives pass about opening a power plant? A: A RESOLUTION DIRECTING THE COMMITTEE ON ENERGY TO CONDUCT AN INQUIRY, IN AID OF LEGISLATION, TO DETERMINE THE OPERABILITY AND UTILIZATION OF THE BATAAN NUCLEAR POWER PLANT (BNPP) AS AN ENERGY SOURCE OF THE COUNTRY | Q: Prior to September 2020 what legislation did the Philippines Senate pass about opening a power plant? A: None."
+  },
+  {
+   "idx": 479,
+   "text": "Donald Trump said \"When the anarchists started ripping down our statues and monuments, right outside, I signed an order immediately, 10 years in prison.\"",
+   "sha": "f1f607e5712c66638edd7b775757cdb9",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said \"When the anarchists started ripping down our statues and monuments, right outside, I signed an order immediately, 10 years in prison.\"\n\nEVIDENCE:\nQ: What was the law signed by Trump regarding damaging federal property? A: Trump signed an executive order that authorizes a penalty of up to 10 years in prison for damaging federal property. It does not say that it will automatically be a 10 year prison sentence. | Q: was this a new law? A: No"
+  },
+  {
+   "idx": 480,
+   "text": "Donald Trump said: \"Biden also vowed to oppose school choice and close down charter schools, ripping away the ladder of opportunity for Black and Hispanic children.\"",
+   "sha": "89048d8823703dd67e8b36b4a35cb31f",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said: \"Biden also vowed to oppose school choice and close down charter schools, ripping away the ladder of opportunity for Black and Hispanic children.\"\n\nEVIDENCE:\nQ: What is 'school choice' A: School choice allows public education funds to follow students to the schools or services that best fit their needs \u2014whether that\u2019s to a public school, private school, charter school, home school or any other learning environment families choose | Q: What are U.S charter schools? A: Charter schools in the United States are primary or secondary education institutions that are funded through taxation and operated by private organizations, rather than local school districts. They do not charge tuition, as they are funded with public tax dollars | Q: Did Joe Biden oppose school choice? A: he supports good charter schools and allowing students to pick among public schools. Those also qualify as school choice options. | Q: Did Joe Biden want to close down charter schools? A: The Biden administration did controversially push for more oversight when it comes to charter school funding."
+  },
+  {
+   "idx": 481,
+   "text": "Donald Trump said: \"When asked if he supports cutting police funding, Joe Biden replied, \u2018Yes, absolutely.\u2019\"",
+   "sha": "cb6b950eeb49c605d0a37b6dd94f690a",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said: \"When asked if he supports cutting police funding, Joe Biden replied, \u2018Yes, absolutely.\u2019\"\n\nEVIDENCE:\nQ: What is Joe Bidens stance on police funding? A: Biden has said \"I don't support defunding the police,\""
+  },
+  {
+   "idx": 482,
+   "text": "Donald trump said: \"Joe Biden recently raised his hand on the debate stage and promised he was going to give it away, your health care dollars to illegal immigrants, which is going to bring massive number of immigrants into our country.\"",
+   "sha": "85a1bb58b002426312121db03ce6b30f",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald trump said: \"Joe Biden recently raised his hand on the debate stage and promised he was going to give it away, your health care dollars to illegal immigrants, which is going to bring massive number of immigrants into our country.\"\n\nEVIDENCE:\nQ: Why is Biden giving healthcare to undocumented immigrants? A: When asked by Guthrie if he would provide federally supported health coverage to undocumented immigrants, Biden quickly corrected her. \"You cannot let people who are sick, no matter where they come from, no matter what their status, go uncovered. You can\u2019t do that. It\u2019s just going to be taken care of. Period. You have to. It\u2019s the humane thing to do,\u201d he insisted. | Q: Is undocumented immigrant healthcare expensive? A: Equitable coverage for undocumented immigrants makes financial sense. The federal government already covers urgent care, which is very expensive. The Emergency Medical Treatment and Active Labor Act (EMTALA) requires hospitals to stabilize all low-income individuals with life-threatening conditions, and Emergency Medicaid covers emergency services for immigrants who would otherwise qualify for Med"
+  },
+  {
+   "idx": 483,
+   "text": "Donald Trump said \"We have spent nearly $2.5 trillion on completely rebuilding our military, which was very badly depleted when I took office.\"",
+   "sha": "55412063f2d1775d23e80145b9437320",
+   "gold": "NOT_ENOUGH_EVIDENCE",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said \"We have spent nearly $2.5 trillion on completely rebuilding our military, which was very badly depleted when I took office.\"\n\nEVIDENCE:\nQ: What was the US Defense Budget for 2017-2020? A: Figure 1. Department of Defense Budget $ in billions FY 2017 Actuals FY 2018 Actuals FY 2019 Enacted FY 2020 Request Base 523.5 599.6 616.1 544.5 Overseas Contingency Operations 82.5 65.2 68.8 66.7 OCO for Base -- -- -- 97.9 Emergency -- 5.8 -- 9.2 Total 606.0 670.6 685.0 718.3 | Q: What was the US Defense Budget for 2017-2020? A: 606 + 670.6 + 685 + 718.3 = 2679.9 billion. | Q: Was all of the money budgeted for US Defense in the years 2017-2020 spent? A: No answer could be found. | Q: Did the Trump administration invest $2 trillion in the military? A: No answer could be found. | Q: Is Trump\u2019s defense budget really $2 trillion? A: No answer could be found."
+  },
+  {
+   "idx": 484,
+   "text": "The Edo State government of Nigeria receives 600 million naira monthly as a security vote.",
+   "sha": "8340f8a9c3700f764a21a600c21fef03",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The Edo State government of Nigeria receives 600 million naira monthly as a security vote.\n\nEVIDENCE:\nQ: What are security votes? A: Security votes are monthly budgetary allocations provided to the 36 states in Nigeria by the federal government. These funds, which run into billions of naira, are provided for the sole purpose of financing security within the states. The percentage of allocation is dependent on the level of security in the state. For instance, states which suffer to a large degree pipeline vandalisms, violent kid | Q: How much money did the Edo State government of Nigeria receive through security voting in 2020? A: 5 billion naira | Q: What was the monthly amount in 2020? A: 5 billion divide by 12 = approx 417 million naira monthly. | Q: How are security vote funding disbursed? A: A relic of military rule, these funds are provided to certain federal, state and local government officials to disburse at their discretion. In theory, they are reserved for covering unforeseen security needs. Transacted mostly in cash, security vote spending is not subject to legislative oversight or independent audit because of its ostensibly sensitive nature. Although officials often spend some | Q: What is the estimated amount of unaccountable, cash expenditures? A: Transparency International estimates that these secretive, unaccounted-for, cash expenditures add up to over $670 million (N241.2 billion2 ) annually. Our analysis of 29 state budgets (no data exists for 7 states) reveals they spend an average of $580 million (N208.8 billion) in total each year on security votes (see Annex B). Federal government security votes average over $50 million (N18 billion | Q: How much did Edo state receive as security vote A: 6.5 billion naira | Q: How much is 6.5 billion naira equal per month A: 417 million naira monthly."
+  },
+  {
+   "idx": 485,
+   "text": "Donald Trump said \"Last month, I took on Big Pharma. You think that is easy? I signed orders that would massively lower the cost of your prescription drugs.\"",
+   "sha": "ccb9f770ad2c4afcc709905f473b54d3",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Donald Trump said \"Last month, I took on Big Pharma. You think that is easy? I signed orders that would massively lower the cost of your prescription drugs.\"\n\nEVIDENCE:\nQ: Did Donald Trump sign orders that would reduce the cost of prescription drugs? A: Trump signed four executive orders on July 24, 2020, that are aimed at lowering prescription drug prices. | Q: Did Donald Trump sign orders that would reduce the cost of prescription drugs? A: Trump signed four executive orders on July 24, 2020, to lower prescription drug prices. | Q: Did Trump say what is claimed? A: Yes"
+  },
+  {
+   "idx": 486,
+   "text": "President Trump marshalled the full resources of our federal government to deal with the coronavirus from the outset. He directed the US to forge a seamless partnership with governors across America in both political parties.",
+   "sha": "b8ac46e516dabe5cf8195179cae16914",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: President Trump marshalled the full resources of our federal government to deal with the coronavirus from the outset. He directed the US to forge a seamless partnership with governors across America in both political parties.\n\nEVIDENCE:\nQ: Who procured US medical supplies for the coronavirus? A: At a press briefing on March 19, President Trump brushed aside demands that the federal government take the lead in buying medical equipment \u2013 including the coronavirus tests, ventilators and protective gear \u2013 critically needed to save lives in the current pandemic. \u201cWe are not a shipping clerk\u201d Trump said, and left it to the states to take first responsibility for procuring life-saving equipment. | Q: Did Trump's procurement stance cause problems? A: Yes | Q: Did the US state governors have everything they needed from Federal Government to tackle the coronavirus? A: No"
+  },
+  {
+   "idx": 487,
+   "text": "Kyle Rittenhouse, shooter in the Kenosha shootings, was a white supremacist.",
+   "sha": "fe3817c198a9201aefdc6bc935f61957",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Kyle Rittenhouse, shooter in the Kenosha shootings, was a white supremacist.\n\nEVIDENCE:\nQ: Was Kyle Rittenhouse linked to any white supremacy groups? A: The Anti-Defamation League, which tracks extremist activity, found no indication from Rittenhouse's social media footprint that he is connected to any extremist movements."
+  },
+  {
+   "idx": 488,
+   "text": "Mobs torched our cities while popular members of Congress promote the same socialism my father fought against in World War II.",
+   "sha": "13a2963ac5105bcc3b09c25a2683c6c5",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Mobs torched our cities while popular members of Congress promote the same socialism my father fought against in World War II.\n\nEVIDENCE:\nQ: What type of socialism did the speakers father fight against? A: No answer could be found. | Q: Have mobs torched cities in the US? (no time frame given) A: No answer could be found. | Q: Did Burgess Owens father fight against socialists in World War Two? A: No. The United States didn\u2019t fight socialists in World War II. The U.S. fought fascists (Germany and Italy) and an empire (Japan). The U.S. fought on the same side as communists (the Soviet Union). | Q: Did Burgess Owens father fight against socialists in World War Two? A: No. Even though the details of Burgess Owens father are not widely known, The United States didn\u2019t fight socialists in World War II. The U.S. fought fascists (Germany and Italy) and an empire (Japan). The U.S. fought on the same side as communists (the Soviet Union). | Q: Who is Burgess Owens? A: Clarence \"Burgess\" Owens is the representative for Utah\u2019s 4th congressional district and is a Republican. He has served since Jan 3, 2021. | Q: Who was Burgess Owens father? A: Owens has managed to keep his personal life away from the limelight, hence he has not disclosed any information about his parents."
+  },
+  {
+   "idx": 489,
+   "text": "Kenosha police allowed Kyle Rittenhouse to walk away after he killed two protesters and injured a third with an AR-15-style rifle.",
+   "sha": "a3b57ae2d9640c761a781a55b86a9dcb",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Kenosha police allowed Kyle Rittenhouse to walk away after he killed two protesters and injured a third with an AR-15-style rifle.\n\nEVIDENCE:\nQ: When did Kyle RIttenhouse kill someone? A: According to eyewitness videos and the criminal complaint, Rittenhouse shot and killed Rosenbaum in a parking lot after Rosenbaum chased him and tried to grab his gun. Rittenhouse then began running slowly down the street, but tripped and fell as a crowd began to follow him. While he was on the ground, Huber approached him with a skateboard in one hand and reached for Rittenhouse\u2019s gun with the ot | Q: Did he approach the police in the aftermath? A: Yes | Q: Did the police just let him go? A: Kenosha Police Chief Daniel Miskinis defended his department\u2019s actions in an Aug. 28, 2020 news conference, saying the police in the vehicles didn\u2019t see Rittenhouse as a threat and wouldn\u2019t have heard yelling from the crowd over other noise. He said officers were more focused on the injuries and what happened down the street."
+  },
+  {
+   "idx": 490,
+   "text": "EU Trade Commissioner resigned after being accused of violating COVID-19 health rules in Ireland",
+   "sha": "0e67d11ab137d32d9663168c27a1b5de",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: EU Trade Commissioner resigned after being accused of violating COVID-19 health rules in Ireland\n\nEVIDENCE:\nQ: Who was the EU Trade Commissioner the claim refers to? A: Phil Hogan. | Q: Did Phil Hogan resign after being accused of violating COVID-19 health rules in Ireland A: Yes"
+  },
+  {
+   "idx": 491,
+   "text": "Joe Biden wants to end school choice.",
+   "sha": "8617c9d578a2dd3ec9c1cbad6807c5d1",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Joe Biden wants to end school choice.\n\nEVIDENCE:\nQ: What count as school choice? A: Families who can afford it often choose their traditional public schools by moving to or buying a house in their desired school district. For many families, that option is enough. But there are many more ways for families to choose the best educational setting for their kids. School choice options: Education Savings Accounts (ESAs), School Vouchers, Tax-Credit Scholarships, Individual Tax Credits  | Q: Does the Biden administration mention any of the school choice options in their campaign? A: Yes, and they support all of them apart from vouchers."
+  },
+  {
+   "idx": 492,
+   "text": "Where President Donald Trump achieved energy independence for the United States, Joe Biden would abolish fossil fuels and end fracking.",
+   "sha": "c1789ba18d354cd93820d825373e09d5",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Where President Donald Trump achieved energy independence for the United States, Joe Biden would abolish fossil fuels and end fracking.\n\nEVIDENCE:\nQ: What is Joe Biden's position on energy? A: Joe BIden produced a clean energy plan which does not say anything about abolishing fossil fuels and banning fracking. It is a measured document which generally encourages a move towards investment in greener energy, net-zero emissions and increasing taxes to fund these moves, but not outright bans. | Q: What does Joe Biden's administration particularly say about Fracking? A: During a debate with Bernie Sanders: There was a lot of confusion Sunday night about whether Joe Biden made a big change in his energy platform during his debate with Bernie Sanders. He didn't. What happened: At one point during his exchange on climate policy with Bernie Sanders, Biden said \"no new fracking.\" That raised antennae about whether he was going beyond his existing vow to end new oil-an"
+  },
+  {
+   "idx": 493,
+   "text": "Before the first case of the coronavirus spread within the United States, the president Donald Trump took unprecedented action and suspended all travel from China.",
+   "sha": "03294a37162d00b4af334bc0bc23066f",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Before the first case of the coronavirus spread within the United States, the president Donald Trump took unprecedented action and suspended all travel from China.\n\nEVIDENCE:\nQ: When was the first case of COVID-19 discovered in the US A: 21st January 2020 | Q: How many people were still travelling after the travel ban on China after the discovery of the novel coronavirus in the US A: There were 1,300 direct flights to 17 cities before President Trump\u2019s travel restrictions. Since then, nearly 40,000 Americans and other authorized travelers have made the trip"
+  },
+  {
+   "idx": 494,
+   "text": "The Obama-Biden administration secretly launched a surveillance operation on the Trump campaign.",
+   "sha": "436ff58a6a23ed5363e53e0a6f604b20",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The Obama-Biden administration secretly launched a surveillance operation on the Trump campaign.\n\nEVIDENCE:\nQ: Was there a surveillance operation on the Trump campaign? A: Yes | Q: Was there a surveillance operation on the Trump campaign? A: Yes | Q: Did the Obama-Biden administration have any connection to the FBI operation on the Trump campaign? A: That FBI investigation itself has been the subject of investigations by the Justice Department and Congress. Not one found that Obama initiated or meddled in the FBI\u2019s work. | Q: Did the Obama-Biden administration have any connection to the FBI operation on the Trump campaign? A: No"
+  },
+  {
+   "idx": 495,
+   "text": "This Democratic Party of Joe Biden is pushing the so-called Green New Deal. If given power, they would essentially ban animal agriculture and eliminate gas-powered cars.",
+   "sha": "660dde1299bbab58003278d8401ddf62",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: This Democratic Party of Joe Biden is pushing the so-called Green New Deal. If given power, they would essentially ban animal agriculture and eliminate gas-powered cars.\n\nEVIDENCE:\nQ: Does the Democratic Party of Joe Biden has a 10 year Green New Deal in their party's Manifesto ? A: Joe Biden\u2019s Build Back Better plan ensures that \u2013 coming out of this profound public health and economic crisis, and facing the persistent climate crisis \u2013 we are never caught flat-footed again. He will launch a national effort aimed at creating the jobs we need to build a modern, sustainable infrastructure now and deliver an equitable clean energy future. The current coronavirus crisis destroyed  | Q: Does the Democratic Party of Joe Biden plan to essentially ban animal agriculture and eliminate gas-powered cars in 10 years ? A: INVEST IN SUSTAINABLE AGRICULTURE AND CONSERVATION Mobilizing the next generation of conservation and resilience workers through a Civilian Climate Corps. Biden will put a new, diverse generation of patriotic Americans to work conserving our public lands, bolstering community resilience, and addressing the changing climate, while putting good-paying union jobs within reach for more Americans, incl | Q: Is the Democratic Party of Joe Biden pushing the so-called Green New Deal? A: The Sunrise Movement, which supported Vermont Sen. Bernie Sanders in the Democratic primary, in April called on Biden to adopt the frameworks of the Green New Deal. When Biden released the new plan July 14, the group tweeted its support. | Q: What is Joe Biden's plan for the Green New Deal? A: Biden\u2019s overarching economic recovery plan, which includes his new climate plan. Biden\u2019s campaign rolled out the Build Back Better agenda recently to address economic recovery for small businesses and families. The new $2 trillion climate plan sets a target for achieving net-zero emissions by 2050, which would balance out the emission and removal of greenhouse gases that warm the planet. His plan  | Q: What is the Green New Deal? A: The Democratic debate over environmental issues has centered heavily around the Green New Deal, a plan to rapidly switch to clean energy to head off the worst projected effects of climate change. However, unlike other ideas that Democrats are discussing on the campaign trail, the Green New Deal is not a clear policy proposal in and of itself. Instead, it refers to a 14-page resolution sponsored by | Q: Which presidential candidates are proposing the Green New Deal? A: Among the candidates who have put out plans along these lines are former Vice President Joe Biden, Sen. Elizabeth Warren of Massachusetts, Sen. Bernie Sanders of Vermont, Sen. Kamala Harris of California, Sen. Cory Booker of New Jersey, South Bend, Indiana, Mayor Pete Buttigieg, former Rep. Beto O\u2019Rourke, and businessman Andrew Yang. The plans differ in scale. Sander's, the largest by far, propose | Q: Will the Green New Deal ban animal agriculture? A: There is no mention of banning animal agriculture. | Q: Will the Green New Deal eliminate gas-powered cars? A: The rise of electric vehicles, however, doesn't automatically mean the end of the reign of the gas-powered car."
+  },
+  {
+   "idx": 496,
+   "text": "Joe Biden is for open borders, sanctuary cities, free lawyers and health care for illegal immigrants.",
+   "sha": "349c4918c60f088016cd1d5b77acf9b3",
+   "gold": "CONFLICTING",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Joe Biden is for open borders, sanctuary cities, free lawyers and health care for illegal immigrants.\n\nEVIDENCE:\nQ: Did Joe Biden support open borders, sanctuary cities, free lawyers and health care for illegal immigrants in 2020? A: This is a mix of misleading and accurate characterizations of Biden's positions. As a single sentence, it is not correct. | Q: Did Joe Biden support open borders for illegal immigrants in 2020? A: Biden said that if elected, \"there will not be another foot of wall constructed.\" But that\u2019s not the same as advocating for \"open borders.\" | Q: Did Joe Biden support open borders for illegal immigrants in 2020? A: This is a mix of misleading and accurate characterizations of Biden's positions. As a single sentence, it is not correct. | Q: Did Joe Biden support sanctuary cities for illegal immigrants in 2020? A: Biden was asked at a Democratic primary debate if immigrants illegally in the country who are arrested by local police should be turned over to immigration officials. \"No,\" Biden answered. While there\u2019s no official definition for sanctuary cities, the term is commonly applied to cities that limit their cooperation with federal immigration authorities. | Q: Did Joe Biden support free lawyers for illegal immigrants in 2020? A: Biden would double the number of immigration judges, court staff, and interpreters working on immigration cases. His plan says humanitarian needs are best met through a network of organizations, including legal non-profits, and that Biden would \"dramatically increase U.S. government resources\" to support migrants waiting on their asylum cases and the organizations helping them. But it doesn\u2019t spec | Q: Did Joe Biden support free lawyers for illegal immigrants in 2020? A: Biden would double the number of immigration judges, court staff, and interpreters But it doesn\u2019t specify \"free lawyers.\" | Q: Did Joe Biden support healthcare access for illegal immigrants in 2020? A: Biden supports extending health care access to all immigrants, even if they are illegally in the country. (The health care would not be \"free.\") | Q: Did Joe Biden support sanctuary cities for immigrants in 2020? A: Biden said that if elected, \"there will not be another foot of wall constructed.\" But that\u2019s not the same as advocating for \"open borders.\""
+  },
+  {
+   "idx": 497,
+   "text": "Nancy Pelosi says that China would prefer Joe Biden.",
+   "sha": "8a87ce88a0d25065f8f3391168da6c37",
+   "gold": "SUPPORTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: Nancy Pelosi says that China would prefer Joe Biden.\n\nEVIDENCE:\nQ: Did Nancy Pelosi say that China would prefer Joe Biden to win the US Presidential election? A: Yes | Q: In what context did she say this? A: In repsonse to: BASH: OK. So, I want to ask -- I really want to ask you about something different, but it's so important, and that is the security of American elections. A top elections official in the office of the Director of National Intelligence revealed on Friday that Russia is using a range of measures to primarily denigrate former Vice President Joe Biden, while both China and Iran don't wa | Q: Would China prefer Trump o win the election A: Russia is actively working to \"denigrate\" presumptive Democratic presidential nominee Joe Biden, while China views President Donald Trump as \"unpredictable\" and prefers that he not win re-election, according to a new U.S. intelligence assessment."
+  },
+  {
+   "idx": 498,
+   "text": "As we speak the US are developing a growing number of treatments, including convalescent plasma, that are saving lives all across the country.",
+   "sha": "b57a0e6ec4b8e58d48943b0b7b582a72",
+   "gold": "NOT_ENOUGH_EVIDENCE",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: As we speak the US are developing a growing number of treatments, including convalescent plasma, that are saving lives all across the country.\n\nEVIDENCE:\nQ: Was convalescent plasma treatment approved for use in the usa? A: FDA Issues Emergency Use Authorization for Convalescent Plasma as Potential Promising COVID\u201319 Treatment, Another Achievement in Administration\u2019s Fight Against Pandemic | Q: Has the plasma been saving lots of lives? A: But clinical trials have not proved whether plasma can help people fighting the coronavirus. Several top health officials \u2014 led by Dr. Collins, the director of the National Institutes of Health; Dr. Fauci, the government\u2019s top infectious disease expert; and Dr. Lane \u2014 urged their colleagues last week to hold off, citing recent data from the country\u2019s largest plasma study, run by the Mayo Clinic. T"
+  },
+  {
+   "idx": 499,
+   "text": "The first night of the US Republican National Convention had 128.4 million viewers",
+   "sha": "74d33a90a54745614cfcfd5b2fe8a2fc",
+   "gold": "REFUTED",
+   "evidence": "nothing in the evidence settles it either way.\n- CONFLICTING: the evidence disagrees with itself, or supports only a cherry-picked part.\n\nUse ONLY the evidence. Do not use your own knowledge.\n\nCLAIM: The first night of the US Republican National Convention had 128.4 million viewers\n\nEVIDENCE:\nQ: Was the US Republican National Convention of 2020 televised? A: Night one of the Republican convention was broadcast on cable and television networks | Q: Who captures viewing numbers in the U.S for tv shows? A: The Nielsen company who statistically estimates the number of Americans watching TV and the demographic breakdown of viewers | Q: What was Nielsons figures for the 1st night Republican National Convention. A: An estimated 17 million people tuned in to watch the first night of the 2020 Republican National Convention on Monday, August 24 | Q: How many viewers tuned on the first night of the Republican National Convention A: An estimated 17 million people tuned in to watch the first night of the 2020 Republican National Convention on Monday, August 24."
+  }
+ ],
+ "metrics": {
+  "n": 60,
+  "false_drop_rate": 0.0,
+  "coverage": 0.0,
+  "escalate_rate": 1.0,
+  "scope_ambiguous": 0.1333,
+  "encoder_refusal": 1.0,
+  "dispositions": {
+   "ESCALATE": 60
+  }
+ },
+ "digest": "aeaea7cd9dacb8ce10b72d32307ec3c5"
+}
