@@ -931,3 +931,76 @@ family. 1% deterministic coverage is the expected behaviour; SOTA escapes it onl
    two independent encoders disagreeing on a sentence is evidence of an encoding problem, and costs nothing.
 3. **Quantifier scope cannot be fixed by parsing.** Enumerate readings, let Z3 adjudicate, abstain on
    disagreement -- sub-millisecond, and the only mechanism in the mining that attacks scope without a model.
+
+---
+
+### spaCy WIRED IN VERTICALLY + A SCOPE GATE (2026-10-29)
+
+#### The 2026 research settled three things before any code was written
+1. **A word list cannot improve a dependency parser.** Measured: 3,000 new lexemes = **0.00** change in
+   POS/dep/lemma; random vectors moved 40% of parses with no direction. Structural reason: md's parser sees
+   only NORM/PREFIX/SUFFIX/SHAPE/IS_SPACE + static vectors; `lemma`, `is_stop` and EntityRuler run AFTER
+   the parser. sm->md = +0.06 LAS (noise); md->trf = +3.86 LAS but WORSE sentence segmentation (88.56 vs
+   90.63) and unmeasured on CPU here. So the vocabulary does what a vocabulary can: tokenisation + lemma.
+2. **Antonymy is not negation.** 47.8% of WordNet antonym pairs are affixal; 52.2% are lexical CONTRARIES
+   (borrow/lend, majority/minority) -> mapping to not is a soundness bug. Only 48.8% of un-/in-/non-
+   adjectives carry a link, so recall tops out near half.
+3. **Synonym-based predicate renaming is unsafe.** Measured: `doctor` shares synsets with {bushel, fix,
+   doctor up}; `cat` with {barf, bozo}; `significant` collapses with `substantial`. Any-synset merging:
+   65% recall, ~5% false merges.
+4. **Quantifier scope cannot be resolved.** Humans ~90% on the majority reading; best LLM produces BOTH
+   readings only **64%** and is biased to surface scope.
+
+#### `tools/logos/nlp/domain_nlp.py` -- 5,937-term vocabulary from our own artifacts
+What it fixes, measured:
+`
+stock : "macro-F1 is a metric." -> nsubj = [macro, -, F1]   <- THREE garbage subjects
+domain: "macro-F1 is a metric." -> nsubj = [macro-F1]       <- ONE clean subject
+`
+It does **not** improve parsing in general; it fixes tokenisation of domain terms, which fixes SUBJECT
+IDENTIFICATION for those sentences. Installed as ONE compiled regex via `token_match` over the 4,372
+shape-mangled terms. Cost: **3.70 vs 3.61 ms/claim (2.5%)**. Vocabulary is TTL-cached (mining = 23 s).
+
+#### WordNet/FrameNet bridge -- reusing an existing orphan
+`logos/lexical.py` ALREADY had antonyms/synonyms/hypernyms/`frame_of`/`frame_elements`/
+`is_homonymous`/`relation`/`modality`, wired into dataset generation and into **nothing** in the logic
+layer. Three levers now exposed, each with the guard the research demanded:
+- `same_predicate(a,b,pos)` -- POS-restricted shared synset, renames nothing, plus a NEVER_MERGE blocklist
+  so statistical/modal/quantifier vocabulary cannot collapse.
+- `is_morphological_negation(w)` -- direction DECIDED (unable->able, harmless->harmful, nonlinear->linear),
+  **None** when spelling cannot orient it, marked `advisory: True` (ESCALATE trigger, never a source of
+  not), with a blocklist closing the measured `disorders -> order` false positive.
+- `relational_frame(w)` -- a frame with unfilled core slots means the noun is relational, so "a treatment
+  for X" is not unary `treatment(x)`. The principled version of dep_encoder's ad-hoc `prep` guard.
+
+#### `tools/logos/logic/scope_triage.py` -- detect and ABSTAIN, never resolve
+MEASURED ON 300 REAL CLAIMS: **23.3% are scope ambiguous** -- quantifier-quantifier 31, quantifier-negation
+15, quantifier-comparative 8, comparative-comparative 6, quantifier-adverb 2.
+The one sound move is implemented: `readings_differ()` asks Z3 whether two readings differ. **AGREE** = the
+ambiguity is harmless and the verdict STANDS (a proof, not a guess). **DIFFER** = abstain. No function picks a
+reading, and a test asserts that. Wired into dep_encoder as a pre-acceptance gate, placed LAST so a more
+specific structural refusal speaks first.
+
+#### Three corrections to my own new code
+`canonical_predicate("doctor")` returned **"bushel"** (alphabetical-first across ALL synsets -> polysemy
+leak); `is_morphological_negation("able")` said negated=True because "able" HAS an antonym; and the scope
+gate initially fired before the structural gates, masking the more useful reason.
+
+#### The performance finding that dwarfs everything
+`
+bare python      1.4 s
+import torch    23.5 s
+import thinc    29.1 s
+IMPORT SPACY    36.3 s   (warm, file cache hot)
+`
+**spaCy's import chain costs ~36 s here.** Every millisecond measurement in this suite is noise beside it.
+Consequence: spaCy modules are skip-in-fast and must run in a LONG-LIVED PROCESS, like llama-server and the
+proposed pre-warmed Lean REPL pool.
+
+#### Next
+1. **ProofWriter-OWA5 + FOLIO** proxy eval -- the only route to a real coverage number for the encoder.
+2. **dep-vs-regex disagreement** as a crosscheck (still not built).
+3. A long-lived **NLP daemon** so the 36 s import is paid once per session.
+4. **Dedup + contamination control** -- strongest measured wins in the 2026 cleaning literature (SemDeDup
+   halves data with minimal loss; n-gram decontamination is DEFEATED by paraphrase, so 13-gram + embedding +
+   paraphrase passes are required; 8-18% HumanEval leak found in RedPajama/StarCoder).
