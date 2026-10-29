@@ -745,3 +745,65 @@ covered by these sources and is not being papered over.** No Lean on the bulk pa
 3. Pre-warmed Lean REPL pool: 13.2 s/claim -> a warm constant.
 4. Proxy eval on **ProofWriter-OWA5** and **FOLIO** (same categorical/Horn family). Expect ProofWriter
    optimistic and FOLIO honest -- FoVer's own 98.5% -> 73% gap is the calibration.
+
+---
+
+### THE LOST_CORRECT REPLAY GATE: A QUALITY SIGNAL WITHOUT LABELS (2026-10-28)
+
+#### The thing this project has been missing
+We cannot report accuracy -- no held-out labelled set, which has blocked three threads for weeks. We CAN
+answer a question that needs no labels: **did my change make anything worse?** That only needs a record of
+what the pipeline said last time.
+
+`tools/logos/verify/regression.py`
+`
+archive(corpus) -> {row_id, sha, text, verdict, refuter, altered, findings[], why[]}
+replay(archive) -> LOST_KEEP / GAINED_KEEP / CHANGED / UNCHANGED + nonzero exit on failure
+`
+Baseline from two populations on purpose: the **fixture** (16 decidable rows, the only ones that can reach
+KEEP -- without them the gate passes vacuously) and **60 real AVeriTeC claims** (which cannot reach KEEP; they
+guard the opposite failure, a change that starts DROPping curated data).
+Measured baseline: `76 rows, KEEP 5 | REPAIR 3 | DROP 5 | ESCALATE 63`. Replay: 76/76 unchanged, PASSED.
+
+#### Proven on the real pipeline, not just on fixtures
+Patched `row_eval.execute` so every finding came back NA (the shape of "I broke the math check") and
+replayed:
+`
+status FAILED
+KEEP count 5 -> 0
+LOST KEEP (5): 2+2=4, pi=3.14159, 1 mile=1.609344 km, both code rows
+  reason: "row_eval said DROP with no named refuter (1/1 checks NA)"
+plus 6 other verdict changes and COVERAGE_SHRANK 5 -> 0
+`
+Restored and it passes again.
+
+#### Two conditions, and the second is load-bearing
+`
+lost_keep == 0                     nothing that was KEEP degraded
+keep_count_new >= keep_count_old   coverage did not shrink
+`
+A gate phrased only as the first is passed trivially by a pipeline that keeps NOTHING. The self-test isolates
+the case where coverage shrinks with an EMPTY lost_keep and still fails.
+
+#### The escape hatch found while testing
+`replay()` compares the archive against current code, so breaking a checker and then running `--build`
+gives a new archive that agrees with the broken code and the gate passes forever. **A ratchet you can reset is
+not a ratchet.** `build()` now refuses to lower the KEEP count; `--force` for the deliberate case.
+
+#### Avoiding false alarms
+The archived ROW TEXT is replayed, not a corpus pointer -- a changed corpus would otherwise read as a thousand
+regressions. Dependency versions (python/sympy/z3/numpy) are pinned in the manifest and drift is reported
+explicitly, because a sympy upgrade changing a simplification is a real event.
+
+#### Scope, stated in the module
+NON-REGRESSION only, never correctness. A suite that is 100% consistently wrong scores perfectly. It is a
+ratchet, not a proof, and it guards 76 rows -- a net, not a census.
+
+#### Next
+1. **Commit the baseline into the repo.** It lives in `~/.cache`, so it is per-machine and a CI could not
+   run it. A gate only one machine can run is half a gate.
+2. Encoder refusal rate on a real corpus -- no labels needed, and the unparsed-token histogram says where the
+   grammar should grow.
+3. Pre-warmed Lean REPL pool: 13.2 s/claim becomes a warm constant.
+4. Proxy eval on ProofWriter-OWA5 and FOLIO (same categorical/Horn family). ProofWriter optimistic, FOLIO
+   honest -- FoVer's 98.5% -> 73% gap is the calibration.

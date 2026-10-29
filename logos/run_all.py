@@ -75,6 +75,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("encoder_bench.py", True),
     ("numeric_signal_eval.py", True),
     ("logic/mathlib_bridge.py", True),
+    ("logic/fol_bridge.py", False),
+    ("verify/regression.py", False),
     ("egress.py", True),                   # live dual-path probe
 )
 
