@@ -1459,3 +1459,42 @@ Pustejovsky's original four.
    KEEP/REPAIR/ESCALATE boundary: hard violation -> REPAIR/DROP, soft violation -> ESCALATE with its weight.
 2. Gate event order on the 100 ordered frames; UNKNOWN(temporal_order) elsewhere.
 3. Attach TYPE_SCHEMA to every edge for comparability, and keep it out of the verdict path.
+
+---
+
+### WEIGHTED MAX-SAT REPAIR ENGINE (2026-10-29)
+
+New: `logic/constraint_solver.py` (11 tests). Suite 50/50. Canary PASSED. LOST_CORRECT gate PASSED.
+
+#### Why this is the engine the verdict ladder was missing
+Yan et al., Front. Comput. Sci. 12(1):55-74 (2018) section 4.1 gives: (1) constraints as **Horn clauses** with a
+worked conflict; (2) **HARD vs SOFT** rules -- "soft rules can be violated in some degree while hard rules must
+always be hold... they can be weighted"; (3) SOFIE solves facts+constraints as **weighted MAX-SAT**.
+A plain SAT check says "unsatisfiable" and stops; the caller still has to decide WHAT to retract. Weighted MAX-SAT
+returns the **minimum-cost retraction set**, which is the whole question for a precision-first suite.
+```
+CONSISTENT -> KEEP        REPAIRED (unique min-cost retraction) -> REPAIR
+ESCALATE (cost tie) -> ESCALATE with the competing repairs     NO_MODEL -> ESCALATE, loudly
+```
+
+#### The result was not what I expected, and the solver was right
+The survey's own bornIn conflict returned **ESCALATE, unique=False, cost=1.0**, not "retract the rival". Because
+retracting the rival assertion costs 1 AND retracting the premise that derives the competing value also costs 1
+-- two different single-fact repairs at equal cost. Reporting REPAIRED would have laundered a coin flip as a
+proof object. **Weights resolve it as a stated POLICY**: with `{cityInCountry:5, bornInCity:5}` it returns
+REPAIRED, retracted `['Bob|bornInCountry|US']`, unique=True. That is what "soft rules can be weighted" buys.
+
+#### Three defects found, one silent
+a. `z.And(*premises)` got fact **keys (strings)** not Bool vars -> "Sort mismatch ... sort is String"; the
+   `in v` filter was True for the key so the list *looked* filtered.
+b. float weights into `add_soft` hit the same String-coercion path -> weights now scaled to integers.
+c. **uniqueness was GUESSED from the weights**; it is now decided by blocking the current retraction set and
+   **re-optimising**. The guess and the check disagree exactly where it matters.
+And one failure was my own **test** bug: the third fact used subject 'Y' instead of 'X', so it never conflicted
+and one retraction was the right answer to the question I actually asked.
+
+#### Next
+1. Wire the solver into `pipeline.evaluate_row` so dispositions are PRODUCED by it, with the retraction set as
+   the proof object on every REPAIR.
+2. Source weights from provenance: a fact corroborated by two independent mechanisms costs more to retract.
+3. Attach TYPE_SCHEMA to each fact so cross-source conflicts are typed; keep qualia out of the verdict path.
