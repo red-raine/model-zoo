@@ -1498,3 +1498,88 @@ and one retraction was the right answer to the question I actually asked.
    the proof object on every REPAIR.
 2. Source weights from provenance: a fact corroborated by two independent mechanisms costs more to retract.
 3. Attach TYPE_SCHEMA to each fact so cross-source conflicts are typed; keep qualia out of the verdict path.
+
+---
+
+### COGNITIVE REASON, NOT FACTS + SOLVER DISCHARGE (2026-10-30)
+
+New: `logic/reasoning.py` (11 tests), `nlp/attribute_relations.py` (9 tests). Wired: `pipeline` discharge.
+
+#### 1. The solver IS now wired (I had said it would be and hadn't done it)
+`evaluate_row(..., solver_discharge=True)` discharges every disposition with weighted MAX-SAT:
+`not KEEP or VERIFIED...` / `not DROP or REFUTED` / `not REPAIR or FIXED`. Support atoms carry
+**provenance weights** (N independent mechanisms = cost N to retract). No discharge -> **demote to ESCALATE**,
+and the retraction set is the proof object. **Only demotes, never promotes** (0 promotions tested).
+```
+2 + 2 = 4           KEEP    ['row|verified|math']
+def f(): return 1   KEEP    ['row|verified|semantic','row|verified|structure']
+def f(): return 1+  DROP    ['row|refuted_by|structure']
+2 + 2 = 5           REPAIR  ['row|repair|fixed']
+canary 60 rows      60 ESCALATE both ways -- no regression
+```
+Also had to add the discharge to the **REPAIR EARLY RETURN**, which bypassed it -- a repaired row had been
+carrying no proof object while every other disposition had one.
+
+#### 2. THE REFRAME: we validate COGNITIVE REASON, not facts
+Metaphor proves the old framing wrong. `"The argument is a house of cards."` -- abstract subject, physical
+predicate. A type checker calls it a violation; it is a **licensed cross-frame mapping**. Same signal, two
+meanings, and no truth oracle can separate them:
+**violation + licensing -> METAPHOR (reasoning mode); violation + no licensing -> CATEGORY_ERROR.**
+```
+The argument is a house of cards.                              METAPHOR
+The committee gave the award to the winner.                    SOUND
+The engine is a beast.                                         METAPHOR
+The argument is a house of cards; therefore the conclusion...  NON_SEQUITUR
+Water boils at 100 degrees celsius.                            SOUND
+```
+Rows 1 and 4 are **the same words** with different verdicts. **A metaphor is not an entailment**: it licenses a
+construal, not a conclusion. NON_SEQUITUR is invisible to a truth oracle -- the premise can be apt and the
+conclusion still not follow.
+
+#### 3. HowNet, corrected -- my rejection was too broad
+C10-3014 (Dong & Dong, COLING 2010) read in full: **KDML uses 2,089 sememes, 128 secondary features and 94
+semantic roles** (I had said undocumented); **two nets -- CRN (concept) and ARN (attribute)** -- I only ever
+considered CRN; **relations are COMPUTED from definitions, "not coded manually as in WordNet"**; English side is
+**96,565 words / 121,262 meanings** (not a stub, bilingual WSD tool); **HowNet_Inference_Pool: "money" -> 2,600
+concepts** (bank, deposit, borrow, buy, steal) and it answers "can we borrow money from a bank?" -- **that is the
+situational witness my 38.2% bucket lacked.** Blockers unchanged and real: no commercial data licence found;
+client unreleased since 2021-12-16.
+
+#### 4. The ARN argument -- the best idea taken from any of this
+*"it is not 'paper' as a whole that is related to 'write', but only one of its attributes, say 'color'... in a
+strict sense, 'paper' is not necessarily related to 'write'."*
+This dissolves the stuck problem: `paper UsedFor write` is **UNDER-SPECIFIED, not false and not unverifiable**.
+The relation holds between an **attribute** and an activity **under a condition**; "we cannot write on white
+paper with chalk" is the qualifier FAILING.
+New `nlp/attribute_relations.py`: `QUALIFIED` -> `rel(a,b) REQUIRES attribute(a)` with the qualifier as a
+precondition **ATOM the MAX-SAT solver consumes as-is**; `UNDERSPECIFIED` -> UNKNOWN, never injectable;
+`NOT_ATTRIBUTE_MEDIATED` -> consult a concept-level witness.
+
+#### 5. Built, measured, REJECTED with its counter-example
+First reasoning module cross-producted every word against every core FE and reported CATEGORY_ERROR for
+**"The committee gave the award to the winner."** (tested the verb 'gave' against a Human role). A false
+CATEGORY_ERROR is catastrophic -> REJECTED. Counter-example kept in `frame_role_note()`; `type_violations()`
+now returns `[]` so it cannot accuse again; a test asserts that sentence is SOUND. Replaced by copular clash,
+where the copula binds the two nominals **syntactically** -- a defensible binding.
+
+#### 6. A silent bug that made the fix look like it worked
+`copular_clash` tokenised with `[A-Za-z][A-Za-z\-]{2,}` (3+ chars) and so **dropped the copula "is"**: no
+copula, no clash, `[]` for every input -- and every *negative* test passed. Only the positive-detection test
+failed. **Third time**: a detector returning nothing passes all negative tests.
+
+#### 7. Two sources I could NOT read, stated plainly
+- `10.1007/978-3-319-73573-3_27` = Chen, Wan, Shi & Xu (2017) **"Deriving Probabilistic Semantic Frames from
+  HowNet"** (CLSW, LNCS) -- **CLOSED, no abstract**. The HowNet->frames bridge exists; method and numbers
+  unverifiable, so not guessed.
+- IEEE **11440692** = Yang & Chen, **"Semantic Frame Recognition for Chinese Literary Metaphor Constructions"**
+  (Dec 2025) -- **BLOCKED** (15 KB JS shell). Characterised from title/venue only.
+- Measured ceiling: FrameNet has **4 Metaphor edges over 1,221 frames (0.33%)** and 127 Perspective_on (10.4%),
+  so **FrameNet cannot license metaphor recognition in general** -- the module reports this rather than requiring
+  a licence it can never find.
+
+#### Next
+1. Quote the ARN qualifier into `constraint_solver` as `requires=` and measure how many real UsedFor edges
+   the qualifier set can discharge.
+2. The Inference Pool is the missing situational witness; needs HowNet data (licence unresolved) or a measured
+   substitute. Will not build on the unlicensed artefact.
+3. Extend the reasoning layer to circular support and unfalsifiability.

@@ -85,6 +85,8 @@ MODULES: tuple[tuple[str, bool], ...] = (
     ("nlp/synset_injection.py", False),
     ("nlp/frames.py", False),
     ("logic/constraint_solver.py", False),
+    ("logic/reasoning.py", False),
+    ("nlp/attribute_relations.py", False),
     ("nlp/wsd_eval.py", True),
     ("nlp/lexicon_ensemble.py", True),
     ("clean/dedup.py", False),

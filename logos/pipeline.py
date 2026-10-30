@@ -333,9 +333,91 @@ def guess_kind(row: str) -> str:
     return "code" if any(m in row for m in markers) else "text"
 
 
+def _solver_audit(findings, disposition, repair_status=None, refuter=None) -> dict:
+    """Discharge the disposition with weighted MAX-SAT, and return the support it could hold.
+
+    WHY THIS IS A GATE AND NOT DECORATION
+    Until now the disposition was ASSIGNED by a sequence of `if` branches. Each branch was individually
+    justified, but nothing checked the thing that matters globally: **does this disposition have any evidence
+    left that can bear it?** A KEEP with no surviving verification is a verdict with no support, and an if-ladder
+    cannot see that because each branch only looks at its own condition.
+
+    So the disposition is written as a fact that must be DISCHARGED by support:
+        not KEEP or VERIFIED_1 or VERIFIED_2 ...        KEEP requires at least one verification to survive
+        not DROP or REFUTED                              DROP requires a named refuter
+        not REPAIR or FIXED                              REPAIR requires an accepted repair
+    and the support atoms carry PROVENANCE WEIGHTS: an atom corroborated by N independent mechanisms costs N to
+    retract, so it survives a conflict that a bare literal would lose. The solver then either holds the
+    disposition or retracts it, and the retraction set is the proof object.
+
+    This can only ever DEMOTE (KEEP/DROP/REPAIR -> ESCALATE). It cannot promote anything, so it cannot loosen
+    the pipeline, which is what keeps the LOST_CORRECT gate honest when it is enabled.
+    """
+    try:
+        from logos.logic import constraint_solver as CS
+    except Exception as e:                                   # noqa: BLE001
+        return {"status": "UNAVAILABLE", "reason": f"{type(e).__name__}: {e}", "disposition": disposition}
+
+    # ---- support atoms, grouped by the class of support they provide
+    verified, unknown = [], []
+    for f in findings:
+        name = getattr(f, "name", None) or getattr(f, "check", None) or "validator"
+        verdict = getattr(f, "verdict", None)
+        indep = int(getattr(f, "independent", 1) or 1)
+        atom = CS.fact("row", str(verdict).lower() if verdict else "unknown", str(name))
+        if verdict is not None and str(verdict).upper().endswith("VERIFIED"):
+            verified.append((atom, indep))
+        elif verdict is not None and str(verdict).upper() == "UNKNOWN":
+            unknown.append((atom, indep))
+
+    weights = {}
+    for atom, indep in verified + unknown:
+        # PROVENANCE IN THE OBJECTIVE: two independent mechanisms agreeing is worth two units of resistance.
+        weights[atom] = float(max(1, indep))
+
+    disp_atom = CS.fact("row", "disposition", disposition)
+    weights[disp_atom] = 100.0            # retracting the verdict is expensive, so it is a last resort
+    facts = [a for a, _ in verified] + [a for a, _ in unknown] + [disp_atom]
+    clauses, mutex = [], []
+
+    if disposition == "KEEP":
+        if not verified:
+            clauses.append(([], [disp_atom]))     # not KEEP
+        else:
+            # not KEEP or any(verified) -- KEEP is discharged only by a surviving verification
+            clauses.append(([a for a, _ in verified], [disp_atom]))
+    elif disposition == "DROP":
+        if refuter:
+            ratom = CS.fact("row", "refuted_by", refuter)
+            facts.append(ratom)
+            weights[ratom] = 5.0                  # a named refuter is strong support
+            clauses.append(([ratom], [disp_atom]))
+        else:
+            clauses.append(([], [disp_atom]))
+    elif disposition == "REPAIR":
+        if repair_status and "FIX" in str(repair_status).upper():
+            fatom = CS.fact("row", "repair", str(repair_status).lower())
+            facts.append(fatom)
+            weights[fatom] = 3.0
+            clauses.append(([fatom], [disp_atom]))
+        else:
+            clauses.append(([], [disp_atom]))
+
+    r = CS.solve(facts, weights=weights, clauses=clauses, mutex=mutex)
+    held = set(r.get("held") or [])
+    discharged = disp_atom in held
+    out = {"status": r.get("status"), "discharged": discharged, "disposition": disposition,
+           "n_support": len(verified) + len(unknown), "support_atoms": sorted(held - {disp_atom})[:8],
+           "cost": r.get("cost"), "unique": r.get("unique"), "retracted": r.get("retracted")}
+    if not discharged:
+        out["reason"] = (f"the disposition {disposition} could not be discharged from the surviving support, "
+                         f"so it is unsupported and fails closed")
+    return out
+
+
 def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None,
                  gate_threshold: float = 0.5, repair_policy: str = "auto",
-                 prose_numeric_flags: bool = False, router=None) -> dict:
+                 prose_numeric_flags: bool = False, router=None, solver_discharge: bool = True) -> dict:
     """One row, all the way through. Returns the disposition plus the reason for it.
 
     Every branch that can change the disposition is recorded in `why`, so a verdict can be audited
@@ -407,11 +489,26 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
                     "repaired": rep["candidate"],
                     "oracle_recheck": "VERIFIED",
                 }
+                # discharge this REPAIR too: the early return must not skip the audit, or a repaired row
+                # carries no proof object while every other disposition does.
+                _audit = _solver_audit(findings, REPAIR, repair_status=rep.get("status")) \
+                    if solver_discharge else None
+                if _audit is not None:
+                    _audit["final"] = REPAIR if _audit.get("discharged") else ESCALATE
+                if _audit is not None and not _audit.get("discharged"):
+                    why.append("solver discharge FAILED for REPAIR: the repair did not re-verify, so the "
+                               "row escalates rather than carrying an unproven alteration")
+                    return {"row": row[:200], "kind": kind, "disposition": ESCALATE,
+                            "refuted_by": rv.refuted_by, "cost": round(rv.total_cost, 3),
+                            "n_findings": len(findings), "gated": False, "gate_sufficient": None,
+                            "low_band": 0, "flags": [], "skipped": rv.skipped, "repaired": None,
+                            "altered": False, "alteration": None, "solver_audit": _audit, "why": why,
+                            "findings": [f.as_dict() for f in findings]}
                 return {"row": row[:200], "kind": kind, "disposition": REPAIR,
                         "refuted_by": rv.refuted_by, "cost": round(rv.total_cost, 3),
                         "n_findings": len(findings), "gated": False, "gate_sufficient": None,
                         "low_band": 0, "flags": [], "skipped": rv.skipped, "repaired": rep["candidate"],
-                        "altered": True, "alteration": alteration, "why": why,
+                        "altered": True, "alteration": alteration, "solver_audit": _audit, "why": why,
                         "findings": [f.as_dict() for f in findings]}
             why.append(f"no repair available: {rep['status']}: {rep['reason'][:80]}")
         elif rv.refuted_by == "math":
@@ -473,6 +570,7 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
     gate = None
     gated = False
     flags: list = []
+    rep = None                      # the repair attempt, if the refutation path ran
     alteration = None
     refuter = rv.refuted_by
     if evidence:
@@ -533,13 +631,28 @@ def evaluate_row(row: str, kind: str | None = None, evidence: list | None = None
                     disposition = ESCALATE
                     why.append("KEEP demoted to ESCALATE: gate unreachable, so evidence is UNKNOWN")
 
+    # ---- DISCHARGE THE DISPOSITION WITH WEIGHTED MAX-SAT. The if-ladder above decides which disposition
+    # looks right; this checks that it has support that can actually bear it, and demotes it if not. It can
+    # only demote, never promote, so enabling it cannot loosen the pipeline.
+    solver_audit = None
+    if solver_discharge:
+        solver_audit = _solver_audit(findings, disposition, repair_status=rep.get("status") if rep else None,
+                                     refuter=refuter)
+        if solver_audit and not solver_audit.get("discharged") and disposition != ESCALATE:
+            why.append(f"solver discharge FAILED for {disposition}: "
+                       f"{solver_audit.get('reason', 'no support survived')} -> ESCALATE")
+            disposition = ESCALATE
+            solver_audit["final"] = ESCALATE
+        elif solver_audit:
+            solver_audit["final"] = disposition
+
     return {"row": row[:200], "kind": kind, "disposition": disposition,
             "refuted_by": refuter, "cost": round(rv.total_cost, 3), "repaired": None, "altered": False,
             "alteration": None,
             "n_findings": len(findings), "gated": gated,
             "gate_sufficient": (gate or {}).get("sufficient"),
             "low_band": len((gate or {}).get("low_band") or []), "flags": flags,
-            "router_tier": router_tier,
+            "router_tier": router_tier, "solver_audit": solver_audit,
             "skipped": rv.skipped, "why": why,
             "findings": [f.as_dict() for f in findings]}
 
@@ -988,6 +1101,51 @@ def run_self_test() -> bool:
         print(f"  [{'PASS' if good else 'FAIL'}] the router cannot promote: still {out3['disposition']}")
     except Exception as e:                                # noqa: BLE001
         print(f"  [SKIP] router unavailable ({type(e).__name__})")
+
+    # --- THE SOLVER DISCHARGE: a disposition must have support that can bear it, and the audit names it
+    a2 = evaluate_row("2 + 2 = 4", kind="text")
+    good = (a2["solver_audit"] or {}).get("discharged") is True and a2["disposition"] == KEEP
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a KEEP is DISCHARGED by a surviving verification "
+          f"({(a2['solver_audit'] or {}).get('support_atoms')})")
+
+    # --- a code KEEP carries TWO independent supports, so it resists retraction more than a bare one
+    a3 = evaluate_row("def f():\n    return 1", kind="code")
+    au3 = a3["solver_audit"] or {}
+    good = au3.get("discharged") is True and au3.get("n_support", 0) >= 2
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a KEEP with 2 independent mechanisms reports both "
+          f"({au3.get('support_atoms')})")
+
+    # --- a DROP is discharged by the NAMED refuter, not by opinion
+    a4 = evaluate_row("def f():\n    return 1 + ", kind="code")
+    au4 = a4["solver_audit"] or {}
+    good = a4["disposition"] == DROP and au4.get("discharged") is True \
+        and any("refuted_by" in x for x in au4.get("support_atoms") or [])
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a DROP is discharged by its named refuter "
+          f"({au4.get('support_atoms')})")
+
+    # --- a REPAIR is discharged by the accepted repair, and its proof is the alteration
+    a5 = evaluate_row("2 + 2 = 5", kind="text")
+    au5 = a5["solver_audit"] or {}
+    good = a5["disposition"] == REPAIR and au5.get("discharged") is True
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a REPAIR is discharged by the accepted repair "
+          f"({au5.get('support_atoms')})")
+
+    # --- and the discharge can only DEMOTE. Turning it off must never yield a MORE confident verdict.
+    worse = 0
+    for _row, _kind in (("2 + 2 = 4", "text"), ("def f():\n    return 1", "code"),
+                        ("2 + 2 = 5", "text"), ("Apoptosis is programmed cell death.", "text")):
+        _off = evaluate_row(_row, kind=_kind, solver_discharge=False)["disposition"]
+        _on = evaluate_row(_row, kind=_kind, solver_discharge=True)["disposition"]
+        if _off == ESCALATE and _on != ESCALATE:
+            worse += 1
+    good = worse == 0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the discharge never PROMOTES a verdict "
+          f"({worse} promotions)")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok

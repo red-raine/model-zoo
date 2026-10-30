@@ -86,7 +86,7 @@ def parse(key: str) -> tuple:
     return s, r, o
 
 
-def solve(facts, functional=(), mutex=(), implications=(), weights=None,
+def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=None,
           max_ties: int = 12) -> dict:
     """Find the minimum-cost set of facts to retract so that every constraint holds.
 
@@ -96,17 +96,25 @@ def solve(facts, functional=(), mutex=(), implications=(), weights=None,
     mutex         explicit (fact_a, fact_b) pairs that cannot both hold.
     implications  list of (premises, conclusion) pairs -- Horn rules. HARD by construction: a violated
                   implication may not be "satisfied" by dropping the rule, only by dropping a fact.
-    weights       {fact_key: cost}. Default 1.0. Higher means the solver prefers to retract something else.
+    clauses       list of (positive_atoms, negative_atoms) meaning OR(pos...) OR NOT(neg...). This is CNF, and it
+                  is what lets a caller say `KEEP requires one of these supporting atoms` --
+                  `not KEEP or support1 or support2`. Horn form cannot express that (it needs atom -> OR(atoms)).
+    weights       {fact_key: cost}. Default 1.0. Higher means the solver prefers to retract something else. A fact
+                  corroborated by TWO INDEPENDENT mechanisms should be given a higher weight than a bare literal,
+                  which is how provenance enters the objective rather than the prose.
 
-    Returns status, retracted facts, total cost, and whether the cheapest repair is UNIQUE. Uniqueness matters:
-    if two different single retractions tie, the verdict is ESCALATE, because picking one would be a guess.
+    Returns status, retracted facts, total cost, whether the cheapest repair is UNIQUE, and `held` -- the atoms
+    asserted in the optimal model, so a caller can ask "which support survived?" rather than only "what broke".
     """
     z = _z3()
     if z is None:
         return {"status": NO_MODEL, "reason": "z3 unavailable"}
     facts = list(dict.fromkeys(facts))
+    extra = [a for pos_neg in clauses for a in list(pos_neg[0]) + list(pos_neg[1]) if a not in facts]
+    for a in dict.fromkeys(extra):
+        facts.append(a)
     if not facts:
-        return {"status": CONSISTENT, "retracted": [], "cost": 0.0, "unique": True,
+        return {"status": CONSISTENT, "retracted": [], "cost": 0.0, "unique": True, "held": [],
                 "reason": "no facts"}
     w = {k: float((weights or {}).get(k, 1.0)) for k in facts}
     v = {k: z.Bool(f"f{ i }") for i, k in enumerate(facts)}
@@ -169,6 +177,13 @@ def solve(facts, functional=(), mutex=(), implications=(), weights=None,
                 opt.add(z.Not(z.And(group[i][1], group[j][1])))
                 n_hard_pairs += 1
 
+    # ---- HARD: CNF clauses. (pos, neg) means OR(pos) OR NOT(neg).
+    for pos_atoms, neg_atoms in clauses:
+        lits = [v[a] for a in pos_atoms if a in v] + [z.Not(v[a]) for a in neg_atoms if a in v]
+        if lits:
+            opt.add(z.Or(*lits))
+            n_hard_pairs += 1
+
     # ---- OBJECTIVE: retract as little as possible. This is the MAX-SAT part.
     #      Weights are scaled to INTEGERS because z3's add_soft wants a numeric weight, and float -> String
     #      coercion is how a weight silently becomes an error rather than a cost.
@@ -182,6 +197,7 @@ def solve(facts, functional=(), mutex=(), implications=(), weights=None,
 
     m = opt.model()
     retracted = [k for k in facts if not z.is_true(m.eval(v[k], model_completion=True))]
+    held = [k for k in facts if z.is_true(m.eval(v[k], model_completion=True))]
     cost = sum(w[k] for k in retracted)
 
     # ---- UNIQUENESS: re-optimise with the current retraction set BLOCKED. If an equally cheap solution
@@ -190,7 +206,7 @@ def solve(facts, functional=(), mutex=(), implications=(), weights=None,
 
     status = CONSISTENT if not retracted else (ESCALATE if not unique else REPAIRED)
     return {"status": status, "retracted": retracted, "cost": round(cost, 3), "unique": unique,
-            "n_facts": len(facts), "n_hard_pairs": n_hard_pairs, "alternatives": ties,
+            "held": held, "n_facts": len(facts), "n_hard_pairs": n_hard_pairs, "alternatives": ties,
             "reason": ("all facts hold" if not retracted else
                        ("minimum-cost repair is unique" if unique else
                         "the cheapest repair is NOT unique, so choosing one would be a guess"))}
