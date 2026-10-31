@@ -1,4 +1,4 @@
-"""logos/logic/reasoning.py — validate the REASONING, not the fact.
+﻿"""logos/logic/reasoning.py — validate the REASONING, not the fact.
 
 THE REFRAME THIS MODULE EXISTS FOR
 ----------------------------------
@@ -71,6 +71,28 @@ if _TOOLS not in sys.path:
 
 SOUND, METAPHOR, CATEGORY_ERROR, NON_SEQUITUR, INSUFFICIENT = (
     "SOUND", "METAPHOR", "CATEGORY_ERROR", "NON_SEQUITUR", "INSUFFICIENT")
+CIRCULAR, UNFALSIFIABLE = "CIRCULAR", "UNFALSIFIABLE"
+
+# Markers that introduce GROUNDS. Splitting on these is what makes circularity checkable at all.
+GROUND_MARKERS = ("because", "since", "given that", "due to the fact that", "on the grounds that",
+                  "for the reason that")
+
+# Markers of an appeal to self-evidence. These are not grounds -- they are the ABSENCE of grounds presented as
+# a ground, which is why they belong with unfalsifiability rather than with circularity.
+SELF_EVIDENCE_MARKERS = ("obviously", "clearly", "everyone knows", "everybody knows", "it is self-evident",
+                         "it is obvious", "needless to say", "goes without saying", "by definition",
+                         "cannot be disproven", "cannot be disproved", "impossible to disprove",
+                         "no one can deny", "undeniably")
+
+# Hedges that remove all content from a claim: nothing observable would count against them.
+VACUITY_MARKERS = ("in some sense", "somehow", "in a way", "to some extent", "more or less",
+                   "it could be argued", "one might say", "in certain respects")
+
+STOPWORDS = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "of", "to", "in", "on",
+             "at", "for", "with", "and", "or", "but", "that", "this", "these", "those", "it", "its", "as",
+             "we", "i", "you", "they", "he", "she", "not", "no", "do", "does", "did", "has", "have", "had",
+             "can", "could", "would", "should", "may", "might", "will", "shall", "there", "here", "so",
+             "because", "since", "if", "then", "than", "which", "who", "whom", "what", "when", "where"}
 
 # CONSTRUCTED (see the docstring): FrameNet semType -> WordNet lexnames that may fill it. Approximate by
 # construction. Any semType absent from here yields None = "cannot tell", never False.
@@ -306,8 +328,8 @@ def non_sequitur(text: str) -> dict:
     still not follow, because a metaphor licenses a way of thinking, not an entailment.
     """
     t = (text or "").lower()
-    marker = next((m for m in INFERENCE_MARKERS if m in t), None)
-    cue = next((c for c in FIGURATIVE_CUES if f" {c} " in f" {t} "), None)
+    marker = next((m for m in INFERENCE_MARKERS if _has_marker(t, m)), None)
+    cue = next((c for c in FIGURATIVE_CUES if _has_marker(t, c)), None)
     if not marker:
         return {"status": "NO_INFERENCE_CLAIM", "marker": None, "cue": cue}
     if not cue:
@@ -317,6 +339,103 @@ def non_sequitur(text: str) -> dict:
                    f"metaphor licenses a construal, not an entailment"}
 
 
+def _norm_text(text: str) -> str:
+    """Lowercase and reduce every run of punctuation/whitespace to a single space, with padding at both ends.
+
+    WHY THIS EXISTS. Every detector here checks `" marker " in " text "`, and that idiom FAILS whenever the marker
+    is adjacent to punctuation: measured, `"The plan will work in some sense."` did not contain `" in some sense "`
+    because a full stop follows the marker. Three detectors (`circular`, `unfalsifiable`, `non_sequitur`) shared
+    the idiom, so all three silently matched nothing on ordinary punctuated prose -- and every NEGATIVE test still
+    passed. Normalising here fixes the class rather than the instance.
+    """
+    return " " + re.sub(r"[^a-z0-9'\-]+", " ", (text or "").lower()).strip() + " "
+
+
+def _has_marker(text: str, marker: str) -> bool:
+    return f" {marker} " in _norm_text(text)
+
+
+def _content(text: str) -> list:
+    return [w for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", (text or "").lower()) if w not in STOPWORDS]
+
+
+def circular(text: str, overlap_threshold: float = 0.75) -> dict:
+    """Do the GROUNDS merely restate the CLAIM?
+
+    "X because X" is circular, and so is "X because X'", where X' is X in synonyms -- the second form is the one
+    that fools a word-overlap test, which is why WordNet synonymy is consulted.
+
+    The proxy is information ADDED by the grounds: if (nearly) every content word of the grounds already appears
+    in the claim, the grounds presuppose what they are supposed to support. A genuine explanation introduces at
+    least one independent term, and that is the negative control this test is built around.
+    """
+    t = (text or "").lower()
+    marker = next((m for m in GROUND_MARKERS if _has_marker(t, m)), None)
+    if not marker:
+        return {"status": "NO_GROUNDS", "marker": None}
+    head, _, grounds = t.partition(marker)
+    claim_c = _content(head)
+    ground_c = _content(grounds)
+    if len(claim_c) < 2 or len(ground_c) < 1:
+        return {"status": "ABSTAIN", "marker": marker,
+                "reason": "not enough content on one side to judge"}
+
+    claim_set = set(claim_c)
+    # RESTATEMENT VIA SYNONYMY: a grounds word that is a WordNet synonym of a claim word is not new information
+    syn_added = set()
+    try:
+        from logos.nlp import lexicon_ensemble as LE
+        for g in ground_c:
+            if g in claim_set:
+                continue
+            s = LE.synonyms(g, pos=None)
+            if claim_set & set(s["sources"]):
+                syn_added.add(g)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+    covered = [g for g in ground_c if g in claim_set or g in syn_added]
+    frac = len(covered) / len(ground_c)
+    new_terms = [g for g in ground_c if g not in claim_set and g not in syn_added]
+    if frac >= overlap_threshold:
+        return {"status": CIRCULAR, "marker": marker, "coverage": round(frac, 3),
+                "restated": covered[:6], "via_synonym": sorted(syn_added)[:4],
+                "why": f"{len(covered)}/{len(ground_c)} content words of the grounds already appear in the "
+                       f"claim, so the grounds add {len(new_terms)} independent term(s) -- they presuppose "
+                       f"what they are offered to support"}
+    return {"status": "NOT_CIRCULAR", "marker": marker, "coverage": round(frac, 3),
+            "new_terms": new_terms[:6],
+            "why": "the grounds introduce independent terms, so they are not a restatement"}
+
+
+def unfalsifiable(text: str) -> dict:
+    """Is the claim held in a way that no observation could count against it?
+
+    Two distinct routes, both structural rather than about truth:
+      SELF_EVIDENT     the claim is asserted as needing no support ("obviously", "everyone knows",
+                       "cannot be disproven"). This is the absence of grounds presented as a ground.
+      VACUOUS          hedges that remove all content ("in some sense", "to some extent"), so nothing
+                       observable would count for or against it.
+
+    Deliberately narrow. A bare "clearly" in ordinary prose is not an epistemic claim, so a marker only counts
+    when it is not immediately followed by a reason -- `"clearly because X"` is falsifiable, `"clearly."` is not.
+    """
+    t = (text or "").lower()
+    for m in SELF_EVIDENCE_MARKERS:
+        if _has_marker(t, m):
+            # if a grounds marker follows, the claim IS being supported, so it is not an appeal to self-evidence
+            if not any(_has_marker(t, g) for g in GROUND_MARKERS):
+                return {"status": UNFALSIFIABLE, "route": "SELF_EVIDENT", "marker": m,
+                        "why": f"{m!r} offers the claim as needing no support and no grounds are given, so "
+                               f"nothing observable is specified that could count against it"}
+    for m in VACUITY_MARKERS:
+        if _has_marker(t, m):
+            return {"status": UNFALSIFIABLE, "route": "VACUOUS", "marker": m,
+                    "why": f"{m!r} removes the content of the claim, so no observation would distinguish a "
+                           f"world where it holds from one where it does not"}
+    return {"status": "NOT_UNFALSIFIABLE", "marker": None}
+
+
 def analyse(text: str) -> dict:
     """The cognitive verdict. Reasons about REASONING, not about truth."""
     ok, why = available()
@@ -324,16 +443,31 @@ def analyse(text: str) -> dict:
         return {"status": INSUFFICIENT, "reason": why}
     clashes = copular_clash(text)
     ns = non_sequitur(text)
+    circ = circular(text)
+    unf = unfalsifiable(text)
 
+    # ORDER MATTERS: an inference-claim defect outranks a figure, because the inference is the reasoning act
+    # itself. Then a circular ground, then unfalsifiability, then the figurative reading.
     if ns["status"] == "NON_SEQUITUR":
         return {"status": NON_SEQUITUR, "clashes": clashes, "inference": ns,
                 "why": ns["why"],
                 "note": "the clauses may each be apt; the INFERENCE is what fails"}
 
+    if circ["status"] == CIRCULAR:
+        return {"status": CIRCULAR, "inference": circ, "clashes": clashes, "why": circ["why"],
+                "note": "the clause is fine; what fails is that the support is the thing being supported"}
+
+    if unf["status"] == UNFALSIFIABLE:
+        return {"status": UNFALSIFIABLE, "inference": unf, "clashes": clashes, "why": unf["why"],
+                "note": "no observation is specified that could count against the claim, so it cannot be "
+                        "reasoned with either way"}
+
     if not clashes:
         return {"status": SOUND, "clashes": [],
-                "why": "no copular type clash and no figurative premise under an inference marker, so no "
-                       "cognitive defect is detected -- which is NOT the same as the statement being true"}
+                "inference": circ if circ["status"] == "NOT_CIRCULAR" else None,
+                "why": "no copular type clash, no figurative premise under an inference marker, no circular "
+                       "ground and no self-evidence appeal, so no cognitive defect is detected -- which is NOT "
+                       "the same as the statement being true"}
 
     lit, unl = [], []
     for c in clashes:
@@ -378,6 +512,9 @@ def measure() -> int:
         "The argument is a house of cards; therefore the conclusion is false.",
         "The engine is a beast.",
         "Water boils at 100 degrees celsius.",
+        "The drug is effective because the drug is effective.",
+        "Obviously the policy is the right one.",
+        "The bridge collapsed because the supporting cables had corroded through.",
     ]
     print(f"  {'sentence':62s} {'verdict':16s} detail")
     for t in CASES:
@@ -499,6 +636,68 @@ def run_self_test() -> bool:
     good = r["status"] in (SOUND, INSUFFICIENT)
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a literal sentence is not manufactured into a defect "
+          f"({r['status']})")
+
+    # --- CIRCULARITY, with the negative control that matters: a real explanation introduces new terms
+    c = circular("The drug is effective because the drug is effective.")
+    good = c["status"] == CIRCULAR
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a restated ground is CIRCULAR ({c['status']}, "
+          f"coverage {c.get('coverage')})")
+
+    c2 = circular("The bridge collapsed because the supporting cables had corroded through.")
+    good = c2["status"] == "NOT_CIRCULAR" and c2.get("new_terms")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a ground that adds independent terms is NOT circular "
+          f"({c2.get('new_terms')})")
+
+    # --- restatement via SYNONYM is the form that defeats a word-overlap test
+    c3 = circular("The claim is accurate because the claim is correct.")
+    good = c3["status"] in (CIRCULAR, "NOT_CIRCULAR")
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] synonym restatement is examined ({c3['status']}, "
+          f"via_synonym={c3.get('via_synonym')})")
+
+    # --- no grounds marker means nothing to judge, and it must abstain rather than guess
+    c4 = circular("The bridge collapsed.")
+    good = c4["status"] == "NO_GROUNDS"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a claim with no grounds marker abstains ({c4['status']})")
+
+    # --- UNFALSIFIABILITY: an appeal to self-evidence with no grounds
+    u = unfalsifiable("Obviously the policy is the right one.")
+    good = u["status"] == UNFALSIFIABLE and u["route"] == "SELF_EVIDENT"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an appeal to self-evidence is UNFALSIFIABLE ({u['route']})")
+
+    # --- and the control: 'clearly BECAUSE X' IS supported, so it must not be flagged
+    u2 = unfalsifiable("Clearly the policy failed because unemployment rose by two points.")
+    good = u2["status"] == "NOT_UNFALSIFIABLE"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] 'clearly because X' is supported and not flagged "
+          f"({u2['status']})")
+
+    u3 = unfalsifiable("The plan will work in some sense.")
+    good = u3["status"] == UNFALSIFIABLE and u3["route"] == "VACUOUS"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a vacuous hedge is UNFALSIFIABLE ({u3['route']})")
+
+    # --- the analyser now reports the new classes
+    r = analyse("The drug is effective because the drug is effective.")
+    good = r["status"] == CIRCULAR
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] analyse() surfaces CIRCULAR ({r['status']})")
+
+    r = analyse("Obviously the policy is the right one.")
+    good = r["status"] == UNFALSIFIABLE
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] analyse() surfaces UNFALSIFIABLE ({r['status']})")
+
+    # --- and a well-formed explanation over literal clauses stays SOUND
+    r = analyse("The tower is 330 metres tall because it has 330 metres of steel framework.")
+    good = r["status"] in (SOUND, INSUFFICIENT)
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] a supported literal explanation is not manufactured into a defect "
           f"({r['status']})")
 
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")

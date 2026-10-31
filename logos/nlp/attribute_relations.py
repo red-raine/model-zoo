@@ -1,4 +1,4 @@
-"""logos/nlp/attribute_relations.py — relations live on ATTRIBUTES, not on whole concepts.
+﻿"""logos/nlp/attribute_relations.py â€” relations live on ATTRIBUTES, not on whole concepts.
 
 THE ARGUMENT THIS IMPLEMENTS, AND WHERE IT COMES FROM
 ----------------------------------------------------
@@ -188,6 +188,68 @@ def qualify(term: str, rel: str, tail: str) -> dict:
                    "not between the two concepts as wholes"}
 
 
+def to_solver_input(edges, attested=None) -> dict:
+    """Turn qualified edges into `constraint_solver` input, so a conditional claim is only asserted when its
+    qualifier is ATTESTED BY SOMETHING.
+
+    `edges`    iterable of (term, rel, tail).
+    `attested` the set of qualifier atoms a source actually supports. Anything not in here is bound HARD false.
+
+    Each QUALIFIED edge becomes
+        fact   term|rel|tail        weight 1.0  (retractable)
+        atom   term|attribute|<n>   the qualifier
+        clause A -> P  ==  P or not A
+    and a qualifier NOT in `attested` is added to `false_atoms`, so the clause forces the edge to be retracted.
+    An UNDERSPECIFIED edge is never turned into a fact at all.
+    """
+    attested = set(attested or ())
+    facts, weights, requires, skipped, false_atoms = [], {}, [], [], []
+    for term, rel, tail in edges:
+        q = qualify(term, rel, tail)
+        if q["status"] != "QUALIFIED":
+            skipped.append({"edge": f"{term} {rel} {tail}", "status": q["status"]})
+            continue
+        key = f"{term}|{rel}|{tail}"
+        facts.append(key)
+        weights[key] = 1.0
+        pre = [x["atom"] for x in q["requires"]]
+        requires.append((key, pre))
+        for p in pre:
+            facts.append(p)
+            weights[p] = 1.0
+            if p not in attested:
+                false_atoms.append(p)
+    return {"facts": facts, "weights": weights, "requires": requires, "skipped": skipped,
+            "false_atoms": false_atoms, "n_attested": len(attested)}
+
+
+def discharge(edges, attested=None) -> dict:
+    """Assert the qualified edges and report which survived, with the retraction set as the proof.
+
+    The result is the answer to "which of these attribute-mediated claims can this suite actually stand behind?"
+    and it names the ones it cannot, rather than silently including them in a signature.
+    """
+    try:
+        from logos.logic import constraint_solver as CS
+    except Exception as e:                                   # noqa: BLE001
+        return {"status": "UNAVAILABLE", "reason": f"{type(e).__name__}: {e}"}
+    spec = to_solver_input(edges, attested=attested)
+    if not spec["facts"]:
+        return {"status": "NO_QUALIFIED_EDGES", "n_input": len(list(edges)) if hasattr(edges, "__len__") else 0,
+                "skipped": spec["skipped"]}
+    r = CS.solve(spec["facts"], requires=spec["requires"], weights=spec["weights"],
+                 false_atoms=spec["false_atoms"])
+    held = set(r.get("held") or [])
+    edge_keys = [f for f, _ in spec["requires"]]
+    kept = [k for k in edge_keys if k in held]
+    lost = [k for k in edge_keys if k not in held]
+    return {"status": r.get("status"), "n_edges": len(edge_keys), "n_kept": len(kept),
+            "n_disqualified": len(lost), "kept": kept, "disqualified": lost,
+            "skipped": spec["skipped"][:8], "cost": r.get("cost"), "unique": r.get("unique"),
+            "why": "a QUALIFIED edge is asserted only if its attribute qualifier survives; an edge whose "
+                   "condition cannot be established is retracted and NAMED, not silently included"}
+
+
 # ------------------------------------------------------------------ measure
 def measure() -> int:
     ok, why = available()
@@ -253,6 +315,54 @@ def measure() -> int:
     print("  witness'. A QUALIFIED edge is not unverifiable -- it is a CONDITIONAL claim, and the condition is")
     print("  what a solver should evaluate. An UNDERSPECIFIED edge is the honest residue: the relation is real")
     print("  but this suite cannot state it well-formed yet, so it must not be injected into a signature.")
+
+    # ---- and now actually DISCHARGE them through the solver, which is the point of having a conditional form
+    print("\n=== discharging the qualified edges through weighted MAX-SAT ===")
+    qedges = []
+    for name in terms:
+        base = name.split(".")[0]
+        for c in S.candidates(name):
+            if c["rel"] in ATTRIBUTE_MEDIATED:
+                qedges.append((base, c["rel"], str(c["tail"]).replace("_", " ")))
+    d = discharge(qedges)
+    print(f"  input attribute-mediated edges: {len(qedges)}")
+    print(f"  status            {d.get('status')}")
+    print(f"  QUALIFIED edges   {d.get('n_edges', 0)}")
+    print(f"  kept              {d.get('n_kept', 0)}")
+    print(f"  disqualified      {d.get('n_disqualified', 0)}")
+    print(f"  cost              {d.get('cost')}  unique: {d.get('unique')}")
+    if d.get("kept"):
+        print(f"  examples KEPT:        {d['kept'][:4]}")
+    if d.get("disqualified"):
+        print(f"  examples DISQUALIFIED: {d['disqualified'][:4]}")
+    print()
+    print("  AND THIS IS THE HONEST RESULT: an attribute qualifier has no support of its own, so the cheapest")
+    print("  consistent assignment is to RETRACT the conditional edge. Almost every edge is disqualified --")
+    print("  which is the correct outcome, not a failure. It says: without a source that attests WHICH ASPECT of")
+    print("  the concept is in play, these claims cannot be stood behind. The ARN argument gives them a correct")
+    print("  FORM; it does not by itself give them a WITNESS. That is what a resource like HowNet's ARN would")
+    print("  supply, and it is not in this suite.")
+
+    # ---- the POSITIVE direction, because "rejects everything" is indistinguishable from "broken"
+    if d.get("disqualified"):
+        target = d["disqualified"][0]
+        q = qualify(*target.split("|"))
+        one = [x["atom"] for x in q.get("requires", [])][:1]
+        d2 = discharge(qedges, attested=one)
+        print(f"\n=== and WITH a source attesting one qualifier ({one[0] if one else '-'}) ===")
+        print(f"  n_kept {d2.get('n_kept')}  n_disqualified {d2.get('n_disqualified')}  cost {d2.get('cost')}")
+        if d2.get("kept"):
+            print(f"  NOW KEPT: {d2['kept'][:3]}")
+        print("  So the mechanism is not a blanket rejection: attest the ASPECT and the edge is dischargeable.")
+        print("  That is the measured difference between a conditional claim with a witness and one without.")
+        print()
+        print(f"  BUT READ THE GRANULARITY, because it is a real limitation: {d2.get('n_kept')} of 13 edges")
+        print("  became dischargeable from ONE attested aspect. `qualify()` returns the attribute set of the")
+        print("  CONCEPT, not of the relation, so a single attested aspect unlocks EVERY relation on that")
+        print("  concept. That is more permissive than the ARN argument implies -- `water UsedFor cleaning`")
+        print("  depends on water's solvent property, not on its oxygen content, and this module cannot tell")
+        print("  those apart. Per-relation aspect selection is what a resource with ARN data would supply;")
+        print("  the qualifier here is per-concept and is therefore only a coarse bound, not a judgement.")
     return 0
 
 
@@ -326,6 +436,39 @@ def run_self_test() -> bool:
     ok = ok and good
     print(f"  [{'PASS' if good else 'FAIL'}] a qualifier atom is consumable by constraint_solver as-is")
 
+    # --- THE MODELLING ERROR, AS A REGRESSION TEST. A precondition that is free to assert is NOT a constraint:
+    #     `A -> P` is satisfied by simply asserting P at zero cost, so 13 of 13 edges came back KEPT. The
+    #     qualifier must be bound HARD FALSE unless something attests it.
+    edges = [("water", "UsedFor", "cleaning")]
+    free = discharge(edges)                                     # unattested -> qualifier false
+    good = free["n_disqualified"] == 1 and free["n_kept"] == 0
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an UNATTESTED precondition disqualifies the edge "
+          f"(kept={free['n_kept']}, disqualified={free['n_disqualified']})")
+
+    # --- and attesting the qualifier flips it, so the mechanism is not a blanket rejection
+    q = qualify("water", "UsedFor", "cleaning")
+    one = [x["atom"] for x in q.get("requires", [])][:1]
+    if one:
+        att = discharge(edges, attested=one)
+        good = att["n_kept"] == 1 and att["n_disqualified"] == 0
+        ok = ok and good
+        print(f"  [{'PASS' if good else 'FAIL'}] an ATTESTED precondition keeps the edge ({one[0]})")
+    else:
+        print("  [SKIP] no qualifier atom came back for water/UsedFor/cleaning")
+        good = True
+
+    # --- a precondition is a distinct atom, not a duplicate of the edge
+    good = q["requires"][0]["atom"] != "water|UsedFor|cleaning"
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] the qualifier is its own atom, so it can carry its own provenance")
+
+    # --- an UNDERSPECIFIED edge must never enter the solver as though it were assertable
+    spec = to_solver_input([("zzznosuchconcept", "UsedFor", "write")])
+    good = spec["facts"] == [] and spec["skipped"]
+    ok = ok and good
+    print(f"  [{'PASS' if good else 'FAIL'}] an UNDERSPECIFIED edge contributes no fact to the solver")
+
     print(f"SELF TEST: {'ALL PASS' if ok else 'FAILURES'}")
     return ok
 
@@ -351,3 +494,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -1583,3 +1583,55 @@ failed. **Third time**: a detector returning nothing passes all negative tests.
 2. The Inference Pool is the missing situational witness; needs HowNet data (licence unresolved) or a measured
    substitute. Will not build on the unlicensed artefact.
 3. Extend the reasoning layer to circular support and unfalsifiability.
+
+---
+
+### ARN QUALIFIERS IN THE SOLVER + CIRCULAR / UNFALSIFIABLE (2026-10-30)
+
+#### 1. The suite slowdown was NOT a regression -- I checked instead of assuming
+I had reported `1623s -> 2993s` as my own regression. It is not. Every module got **~1.88x slower including
+untouched ones** (`per_evidence_synth +71.7s`, `datasets +68.9s`, `ontology_bundle +65.9s`,
+`context_pack +63.7s`). A uniform multiplier across 50 modules is not code.
+**Measured: CPU load 100%, `com.docker.sailor` burned 1,367,245 CPU-seconds.** Re-timing `lexical.py` by hand
+gave **135.6s vs 52.3s recorded earlier -- same module, same code.** Suite cost is **UNKNOWN** until the host is
+quiet; not tuning against a contended stopwatch.
+
+#### 2. ARN qualifiers wired -- and my FIRST encoding was vacuous
+`attribute_relations.discharge()` feeds `constraint_solver` via `requires=` + `false_atoms=`.
+**Encoding bug 1:** modelled as `A -> P` with both soft -> **13/13 edges KEPT at cost 0**, because asserting an
+unattested atom is FREE in a MAX-SAT that only charges for retraction.
+**A precondition that is free to assert is not a constraint.** Fix: `false_atoms` binds unattested preconditions
+HARD false (asserting an unevidenced atom is fabrication).
+**Encoding bug 2:** `qualify()` returns up to 4 attributes and my first expansion demanded **ALL** of them, so
+attesting one still retracted the edge. ARN says the relation holds between **SOME** aspect. Now
+`requires` = `A -> (P1 or P2 or ...)` and `requires_all` is a separate explicit choice.
+```
+99 real ConceptNet attribute-mediated edges -> 13 QUALIFIED
+  unattested:      kept 0,  disqualified 13, cost 13.0, unique True
+  1 attested:      kept 10, disqualified 3
+```
+**Granularity limit, stated not glossed:** the qualifier is per-**CONCEPT**, not per-**RELATION**, so one
+attested aspect unlocks every relation of that concept. `water UsedFor cleaning` depends on water's solvent
+property, not its oxygen content. The qualifier is a **coarse bound, not a judgement.**
+
+#### 3. New cognitive defects: CIRCULAR and UNFALSIFIABLE
+- **CIRCULAR**: grounds restate the claim (coverage 1.0); WordNet **synonym** restatement also checked, because
+  that is the form that defeats a word-overlap test.
+- **UNFALSIFIABLE**: `SELF_EVIDENT` ("obviously", "everyone knows", "cannot be disproven") or `VACUOUS`
+  ("in some sense").
+Negative controls: `"The bridge collapsed because the supporting cables had corroded through."` -> NOT_CIRCULAR
+(reports the independent terms that earn it); `"Clearly the policy failed because unemployment rose by two
+points."` -> NOT_UNFALSIFIABLE (a grounds marker follows).
+`analyse()` orders: NON_SEQUITUR > CIRCULAR > UNFALSIFIABLE > figurative reading.
+
+#### 4. THIRD instance of the silent-detector bug, fixed at the CLASS level
+`circular`/`unfalsifiable`/`non_sequitur` all used `" marker " in " text "`, which fails when the marker
+touches punctuation: `"The plan will work in some sense."` does **not** contain `" in some sense "` because a
+full stop follows. **All three silently matched nothing on punctuated prose and every NEGATIVE test still
+passed.** Fixed with `_norm_text` + `_has_marker` used by all three. Three modules now share this failure
+mode; the pattern is named in the code so the next one is easier to catch.
+
+#### Next
+1. Per-relation aspect selection -- the only route from a coarse bound to a judgement.
+2. Record the real suite cost on a quiet host (current number meaningless).
+3. The Inference Pool remains the missing situational witness; needs HowNet data (licence unresolved).

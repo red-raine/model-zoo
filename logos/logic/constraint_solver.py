@@ -1,4 +1,4 @@
-"""logos/logic/constraint_solver.py — minimal-cost repair over typed facts, with HARD and SOFT rules.
+﻿"""logos/logic/constraint_solver.py — minimal-cost repair over typed facts, with HARD and SOFT rules.
 
 WHERE THIS COMES FROM
 --------------------
@@ -86,8 +86,39 @@ def parse(key: str) -> tuple:
     return s, r, o
 
 
-def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=None,
-          max_ties: int = 12) -> dict:
+def requires_clauses(pairs) -> list:
+    """Expand `A requires one of P1..Pn` into a single CNF clause: `P1 or P2 or ... or not A`.
+
+    ALTERNATIVES, NOT CONJUNCTION -- and I got this wrong first. `qualify()` returns up to four candidate
+    attributes of a concept, and requiring ALL of them made every edge undischargeable even when one qualifier
+    was attested: measured, attesting `water|attribute|oxygen.n.01` still retracted `water|UsedFor|cleaning`
+    because hydrogen and water were also demanded. That is not what the ARN argument says. The relation holds
+    between SOME aspect of the concept and the tail ("some attributes of the concept"), so one attested aspect is
+    enough to state the conditional claim. Use `requires_all_clauses` when a genuine conjunction is meant.
+    """
+    out = []
+    for fact_key, pre in pairs:
+        pre = [p for p in pre if p]
+        if pre:
+            out.append((pre, [fact_key]))
+    return out
+
+
+def requires_all_clauses(pairs) -> list:
+    """Expand `A requires ALL of P1..Pn` into one clause per precondition.
+
+    Kept separate from `requires_clauses` because the two are different claims and conflating them is exactly the
+    bug that made every conditional edge undischargeable.
+    """
+    out = []
+    for fact_key, pre in pairs:
+        for p in pre:
+            out.append(([p], [fact_key]))
+    return out
+
+
+def solve(facts, functional=(), mutex=(), implications=(), clauses=(), requires=(), requires_all=(),
+          false_atoms=(), weights=None, max_ties: int = 12) -> dict:
     """Find the minimum-cost set of facts to retract so that every constraint holds.
 
     facts         iterable of fact() keys. Each is a SOFT assertion: it may be retracted at a cost.
@@ -99,30 +130,46 @@ def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=N
     clauses       list of (positive_atoms, negative_atoms) meaning OR(pos...) OR NOT(neg...). This is CNF, and it
                   is what lets a caller say `KEEP requires one of these supporting atoms` --
                   `not KEEP or support1 or support2`. Horn form cannot express that (it needs atom -> OR(atoms)).
-    weights       {fact_key: cost}. Default 1.0. Higher means the solver prefers to retract something else. A fact
-                  corroborated by TWO INDEPENDENT mechanisms should be given a higher weight than a bare literal,
-                  which is how provenance enters the objective rather than the prose.
+    requires      list of (fact_key, [precondition_atom, ...]) meaning the fact is asserted only if all of its
+                  preconditions survive. Expanded via requires_clauses().
+    false_atoms   atoms bound HARD to false. THIS IS THE LOAD-BEARING PARAMETER for conditional claims.
+
+                  Measured mistake, kept here because it is subtle: I first modelled a precondition as
+                  `A -> P` with both A and P as soft facts, and 13 of 13 conditional edges came back KEPT at
+                  cost 0. The clause was satisfied by simply asserting P, and asserting an unattested atom is
+                  FREE in a MAX-SAT that only charges for retraction. **A precondition that is free to assert
+                  is not a constraint.** So a precondition with nothing attesting it must be bound to false,
+                  which is also the honest semantics: asserting an unevidenced atom is fabrication. With P
+                  hard-false, `A -> P` forces A to be retracted and the edge is NAMED as undischargeable.
+    weights       {fact_key: cost}. Default 1.0. Higher means the solver prefers to retract something else.
 
     Returns status, retracted facts, total cost, whether the cheapest repair is UNIQUE, and `held` -- the atoms
     asserted in the optimal model, so a caller can ask "which support survived?" rather than only "what broke".
     """
+    if requires:
+        clauses = list(clauses) + requires_clauses(requires)
+    if requires_all:
+        clauses = list(clauses) + requires_all_clauses(requires_all)
     z = _z3()
     if z is None:
         return {"status": NO_MODEL, "reason": "z3 unavailable"}
-    facts = list(dict.fromkeys(facts))
-    extra = [a for pos_neg in clauses for a in list(pos_neg[0]) + list(pos_neg[1]) if a not in facts]
-    for a in dict.fromkeys(extra):
-        facts.append(a)
-    if not facts:
+    # SOFT facts are the retractable ones and the ONLY ones the cost charges for. Clause-only atoms, hypotheses
+    # and `false_atoms` all get variables but no soft assertion -- otherwise a hard-false qualifier would show up
+    # as a "retraction" and inflate the cost, which is how a declared-false atom gets reported as a loss.
+    soft = list(dict.fromkeys(facts))
+    false_atoms = list(dict.fromkeys(false_atoms))
+    atoms = list(dict.fromkeys(soft + false_atoms
+                               + [a for pos_neg in clauses for a in list(pos_neg[0]) + list(pos_neg[1])]))
+    if not atoms:
         return {"status": CONSISTENT, "retracted": [], "cost": 0.0, "unique": True, "held": [],
                 "reason": "no facts"}
-    w = {k: float((weights or {}).get(k, 1.0)) for k in facts}
-    v = {k: z.Bool(f"f{ i }") for i, k in enumerate(facts)}
+    w = {k: float((weights or {}).get(k, 1.0)) for k in soft}
+    v = {k: z.Bool(f"f{ i }") for i, k in enumerate(atoms)}
     opt = z.Optimize()
 
     # ---- HARD: functional relations. a subject has at most one object per relation.
     by_sr = collections.defaultdict(list)
-    for k in facts:
+    for k in soft:
         s, r, _o = parse(k)
         if r in functional:
             by_sr[(s, r)].append(k)
@@ -184,10 +231,16 @@ def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=N
             opt.add(z.Or(*lits))
             n_hard_pairs += 1
 
+    # ---- HARD: atoms bound to false. A precondition with nothing attesting it is FALSE, not "unasserted".
+    for a in false_atoms:
+        if a in v:
+            opt.add(z.Not(v[a]))
+            n_hard_pairs += 1
+
     # ---- OBJECTIVE: retract as little as possible. This is the MAX-SAT part.
     #      Weights are scaled to INTEGERS because z3's add_soft wants a numeric weight, and float -> String
     #      coercion is how a weight silently becomes an error rather than a cost.
-    for k in facts:
+    for k in soft:
         opt.add_soft(v[k], weight=max(1, int(round(w[k] * 1000))))
 
     r = opt.check()
@@ -196,8 +249,8 @@ def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=N
                 "n_hard_pairs": n_hard_pairs}
 
     m = opt.model()
-    retracted = [k for k in facts if not z.is_true(m.eval(v[k], model_completion=True))]
-    held = [k for k in facts if z.is_true(m.eval(v[k], model_completion=True))]
+    retracted = [k for k in soft if not z.is_true(m.eval(v[k], model_completion=True))]
+    held = [k for k in soft if z.is_true(m.eval(v[k], model_completion=True))]
     cost = sum(w[k] for k in retracted)
 
     # ---- UNIQUENESS: re-optimise with the current retraction set BLOCKED. If an equally cheap solution
@@ -206,7 +259,7 @@ def solve(facts, functional=(), mutex=(), implications=(), clauses=(), weights=N
 
     status = CONSISTENT if not retracted else (ESCALATE if not unique else REPAIRED)
     return {"status": status, "retracted": retracted, "cost": round(cost, 3), "unique": unique,
-            "held": held, "n_facts": len(facts), "n_hard_pairs": n_hard_pairs, "alternatives": ties,
+            "held": held, "n_facts": len(soft), "n_hard_pairs": n_hard_pairs, "alternatives": ties,
             "reason": ("all facts hold" if not retracted else
                        ("minimum-cost repair is unique" if unique else
                         "the cheapest repair is NOT unique, so choosing one would be a guess"))}
